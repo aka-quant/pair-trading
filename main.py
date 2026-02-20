@@ -1,99 +1,49 @@
 """
-Главный скрипт для запуска бэктестирования стратегии парной торговли
+Главный файл для запуска бэктестирования торговой стратегии
 """
 
-import warnings
-warnings.filterwarnings('ignore')
-
-import pandas as pd
-from pathlib import Path
-
-from config import StrategyConfig, DataConfig, BacktestConfig
-from src.backtest import Backtester
+from src import config
+from src.backtest_engine import BacktestEngine
+from src.strategy import PairTradingStrategy
 
 
 def main():
-    """Основная функция запуска бэктеста"""
+    """
+    Основная функция для запуска бэктеста
+    """
+    print("="*60)
+    print("БЭКТЕСТИРОВАНИЕ СТРАТЕГИИ ПАРНОГО ТРЕЙДИНГА BTC/ETH")
+    print("="*60)
     
-    print("=" * 80)
-    print("ЗАПУСК БЭКТЕСТИРОВАНИЯ СТРАТЕГИИ ПАРНОЙ ТОРГОВЛИ")
-    print("=" * 80)
+    # Инициализация движка бэктестирования
+    engine = BacktestEngine(config)
     
-    # ========================================================================
-    # КОНФИГУРАЦИЯ
-    # ========================================================================
+    # Загрузка данных
+    btc_15m, btc_1h, eth_15m, eth_1h = engine.load_data()
     
-    # Параметры стратегии
-    strategy_config = StrategyConfig(
-        base_symbol="BTC/USDT:USDT",
-        quote_symbol="ETH/USDT:USDT",
-        len_long=100,
-        len_short=10,
-        delta_window=1000,
-        entry_threshold=2.0,
-        exit_threshold=0.0,
-        position_size=1.0,
-        maker_fee=0.0002,
-        taker_fee=0.0005
-    )
+    # Расчет индикаторов
+    data = engine.calculate_indicators(btc_15m, btc_1h, eth_15m, eth_1h)
+    engine.data = data  # Сохраняем данные в движке для визуализации
     
-    # Параметры данных
-    data_config = DataConfig(
-        exchange="okx",
-        timeframe="1h",
-        start_date="2024-01-01 00:00:00",
-        end_date="2024-12-31 23:59:59",
-        cache_dir="data/cache",
-        use_cache=True
-    )
+    # Инициализация стратегии
+    strategy = PairTradingStrategy(data, config)
     
-    # Параметры бэктеста
-    backtest_config = BacktestConfig(
-        initial_capital=10000.0,
-        benchmark="BTC/USDT:USDT",
-        risk_free_rate=0.02,
-        save_plots=True,
-        plots_dir="results/plots",
-        save_reports=True,
-        reports_dir="results/reports"
-    )
+    # Запуск бэктеста
+    trades, equity_curve = engine.run_backtest(strategy)
     
-    # ========================================================================
-    # СОЗДАНИЕ И ЗАПУСК БЭКТЕСТЕРА
-    # ========================================================================
+    # Вывод статистики
+    engine.print_statistics()
     
-    backtester = Backtester(
-        strategy_config=strategy_config,
-        data_config=data_config,
-        backtest_config=backtest_config
-    )
+    # Сохранение результатов
+    engine.save_results()
     
-    # Запуск полного цикла бэктестирования
-    metrics = backtester.run_full_backtest(force_reload=False)
+    # Визуализация
+    engine.plot_results()
     
-    # ========================================================================
-    # ИТОГИ
-    # ========================================================================
-    
-    print("\n" + "=" * 80)
-    print("✅ БЭКТЕСТ ЗАВЕРШЕН УСПЕШНО!")
-    print("=" * 80)
-    
-    print(f"\n📊 Основные результаты:")
-    print(f"  Общая доходность: {metrics['total_return']:.2f}%")
-    print(f"  Конечный капитал: ${metrics['final_equity']:,.2f}")
-    print(f"  Максимальная просадка: {metrics['max_drawdown']:.2f}%")
-    print(f"  Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
-    print(f"  Всего сделок: {metrics['total_trades']}")
-    print(f"  Винрейт: {metrics['win_rate']:.2f}%")
-    
-    print(f"\n📁 Результаты сохранены:")
-    print(f"  Графики: {backtest_config.plots_dir}/")
-    print(f"  Отчеты: {backtest_config.reports_dir}/")
-    print(f"  CSV файлы: results/exports/")
-    
-    return backtester, metrics
+    print(f"\n{'='*60}")
+    print("БЭКТЕСТ ЗАВЕРШЕН!")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
-    backtester, metrics = main()
+    main()

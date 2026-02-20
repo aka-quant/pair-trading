@@ -1,5 +1,9 @@
 """
-Модульная инфраструктура для бэктестирования стратегии парной торговли
+Модуль бэктестера парного трейдинга BTC/ETH
 """
 
-__version__ = "0.1.0"
+from .backtest_engine import BacktestEngine
+from .strategy import PairTradingStrategy
+from . import config
+
+__all__ = ['BacktestEngine', 'PairTradingStrategy', 'config']
