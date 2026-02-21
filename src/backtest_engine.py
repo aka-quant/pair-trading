@@ -260,7 +260,8 @@ class BacktestEngine:
         """Сохранение результатов в файлы"""
         if self.config.SAVE_TRADES_LOG and len(self.trades) > 0:
             trades_df = pd.DataFrame(self.trades)
-            trades_df.to_csv(self.config.TRADES_LOG_FILE, index=False)
+            # Сохраняем в формате Excel - данные будут сразу в столбцах при открытии
+            trades_df.to_excel(self.config.TRADES_LOG_FILE, index=False, engine='openpyxl')
             print(f"\nСделки сохранены в '{self.config.TRADES_LOG_FILE}'")
     
     def plot_results(self):
@@ -271,7 +272,8 @@ class BacktestEngine:
         
         print("\nСоздание графиков...")
         
-        fig, axes = plt.subplots(4, 1, figsize=(15, 16))
+        # Создаем фигуру с общей осью X (sharex=True)
+        fig, axes = plt.subplots(4, 1, figsize=(18, 16), sharex=True)
         
         # График 1: Абсолютная Delta (BTC/ETH)
         ax1 = axes[0]
@@ -279,22 +281,23 @@ class BacktestEngine:
                 label='Delta Absolute (15m)', linewidth=1, color='purple', alpha=0.7)
         ax1.plot(self.data.index, self.data['delta_abs_1h'], 
                 label='Delta Absolute (1H)', linewidth=2, color='blue')
-        ax1.set_title('Абсолютная Delta (BTC/ETH)', fontsize=14, fontweight='bold')
-        ax1.set_ylabel('Delta (BTC/ETH)')
-        ax1.legend(loc='best')
+        ax1.set_title('Абсолютная Delta (BTC/ETH)', fontsize=13, fontweight='bold', pad=12)
+        ax1.set_ylabel('Delta (BTC/ETH)', fontsize=10)
+        ax1.legend(loc='best', fontsize=9)
         ax1.grid(True, alpha=0.3)
+        ax1.tick_params(axis='y', labelsize=9)
         
-        # График 2: Delta % и полосы на 15m
+        # График 2: Delta % и полосы на 15m (ВСЕ точки входа И выхода)
         ax2 = axes[1]
         ax2.plot(self.data.index, self.data['delta_pct_15m'], 
                 label='Delta % (15m)', linewidth=1, color='orange')
         ax2.plot(self.data.index, self.data['upper_2sigma_15m'], 
-                label='+2σ (15m)', linewidth=1, color='green', linestyle='--')
+                label='+1σ (15m)', linewidth=1, color='green', linestyle='--')
         ax2.plot(self.data.index, self.data['lower_2sigma_15m'], 
-                label='-2σ (15m)', linewidth=1, color='red', linestyle='--')
+                label='-1σ (15m)', linewidth=1, color='red', linestyle='--')
         ax2.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
         
-        # Отмечаем сделки
+        # Отмечаем ВСЕ сделки на 15m графике
         trades_df = pd.DataFrame(self.trades)
         long_entries = trades_df[trades_df['type'] == 'LONG ENTRY']
         long_exits = trades_df[trades_df['type'] == 'LONG EXIT']
@@ -302,32 +305,34 @@ class BacktestEngine:
         short_exits = trades_df[trades_df['type'] == 'SHORT EXIT']
         
         ax2.scatter(long_entries['timestamp'], long_entries['price'], 
-                   color='green', marker='^', s=100, label='Long Entry', zorder=5)
+                   color='green', marker='^', s=80, label='Long Entry', zorder=5)
         ax2.scatter(long_exits['timestamp'], long_exits['price'], 
-                   color='blue', marker='v', s=100, label='Long Exit', zorder=5)
+                   color='blue', marker='v', s=80, label='Long Exit', zorder=5)
         ax2.scatter(short_entries['timestamp'], short_entries['price'], 
-                   color='red', marker='v', s=100, label='Short Entry', zorder=5)
+                   color='red', marker='v', s=80, label='Short Entry', zorder=5)
         ax2.scatter(short_exits['timestamp'], short_exits['price'], 
-                   color='orange', marker='^', s=100, label='Short Exit', zorder=5)
+                   color='orange', marker='^', s=80, label='Short Exit', zorder=5)
         
-        ax2.set_title('Delta % и полосы ±2σ (15 минут) - Точки входа', fontsize=14, fontweight='bold')
-        ax2.set_ylabel('Delta %')
-        ax2.legend(loc='best')
+        ax2.set_title('Delta % и полосы ±1σ (15 минут) - Все точки входа и выхода', fontsize=13, fontweight='bold', pad=12)
+        ax2.set_ylabel('Delta %', fontsize=10)
+        ax2.legend(loc='best', fontsize=8, ncol=2)
         ax2.grid(True, alpha=0.3)
+        ax2.tick_params(axis='y', labelsize=9)
         
-        # График 3: Delta % на 1H
+        # График 3: Delta % на 1H (для наглядности тренда)
         ax3 = axes[2]
         ax3.plot(self.data.index, self.data['delta_pct_1h'], 
                 label='Delta % (1H)', linewidth=1, color='blue')
         ax3.plot(self.data.index, self.data['upper_2sigma_1h'], 
-                label='+2σ (1H)', linewidth=1, color='green', linestyle='--')
+                label='+1σ (1H)', linewidth=1, color='green', linestyle='--')
         ax3.plot(self.data.index, self.data['lower_2sigma_1h'], 
-                label='-2σ (1H)', linewidth=1, color='red', linestyle='--')
+                label='-1σ (1H)', linewidth=1, color='red', linestyle='--')
         ax3.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
-        ax3.set_title('Delta % и полосы ±2σ (1 час) - Точки выхода', fontsize=14, fontweight='bold')
-        ax3.set_ylabel('Delta %')
-        ax3.legend(loc='best')
+        ax3.set_title('Delta % и полосы ±1σ (1 час) - Подтверждение тренда', fontsize=13, fontweight='bold', pad=12)
+        ax3.set_ylabel('Delta %', fontsize=10)
+        ax3.legend(loc='best', fontsize=9)
         ax3.grid(True, alpha=0.3)
+        ax3.tick_params(axis='y', labelsize=9)
         
         # График 4: Equity curve
         ax4 = axes[3]
@@ -336,13 +341,20 @@ class BacktestEngine:
                 label='Equity', linewidth=2, color='purple')
         ax4.axhline(y=self.config.INITIAL_CAPITAL, color='gray', 
                    linestyle='--', linewidth=1, label='Starting Capital')
-        ax4.set_title('Кривая капитала', fontsize=14, fontweight='bold')
-        ax4.set_xlabel('Дата')
-        ax4.set_ylabel('Капитал')
-        ax4.legend(loc='best')
+        ax4.set_title('Кривая капитала', fontsize=13, fontweight='bold', pad=12)
+        ax4.set_xlabel('Дата', fontsize=10)
+        ax4.set_ylabel('Капитал', fontsize=10)
+        ax4.legend(loc='best', fontsize=9)
         ax4.grid(True, alpha=0.3)
+        ax4.tick_params(axis='both', labelsize=9)
         
-        plt.tight_layout()
+        # Форматирование оси X (только на последнем графике)
+        import matplotlib.dates as mdates
+        ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax4.xaxis.set_major_locator(mdates.MonthLocator(interval=3))  # Каждые 3 месяца
+        
+        # Настройка пространства между графиками
+        plt.subplots_adjust(left=0.07, right=0.97, top=0.98, bottom=0.05, hspace=0.25)
         
         if self.config.SAVE_CHART:
             plt.savefig(self.config.CHART_FILE, dpi=self.config.CHART_DPI, bbox_inches='tight')

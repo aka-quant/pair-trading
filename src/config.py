@@ -12,7 +12,7 @@ ETH_1H_FILE = 'data/ETH-USDT-SWAP_2021-01-01_2025-12-31_1H.csv'
 LEN_LONG = 100          # Длина долгосрочной скользящей средней
 LEN_SHORT = 10          # Длина краткосрочной скользящей средней
 MEDIAN_PERIOD = 1000    # Период для расчета медианы и стандартного отклонения
-SIGMA_THRESHOLD = 2.0   # Порог в сигмах для входа/выхода (±2σ)
+SIGMA_THRESHOLD = 1.0   # Порог в сигмах для входа/выхода (±1σ)
 
 # === Параметры бэктеста ===
 INITIAL_CAPITAL = 10000  # Начальный капитал в долларах
@@ -20,8 +20,8 @@ COMMISSION_RATE = 0.0    # Комиссия за сделку в процент�
 POSITION_SIZE_MULTIPLIER = 100  # Множитель для масштабирования P&L
 
 # === Параметры визуализации ===
-SAVE_TRADES_LOG = True   # Сохранять ли лог сделок в CSV
-TRADES_LOG_FILE = 'trades_log.csv'
+SAVE_TRADES_LOG = True   # Сохранять ли лог сделок
+TRADES_LOG_FILE = 'trades_log.xlsx'  # Формат Excel для корректного отображения столбцов
 SAVE_CHART = False       # Сохранять ли график результатов
 CHART_FILE = 'backtest_results.png'
 CHART_DPI = 150          # Разрешение графика
