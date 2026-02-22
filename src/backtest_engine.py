@@ -5,6 +5,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import TextBox, Button
+import matplotlib.dates as mdates
 
 
 class BacktestEngine:
@@ -374,11 +376,22 @@ class BacktestEngine:
         
         print("\nСоздание графиков...")
         
-        # Создаем фигуру с общей осью X (sharex=True)
-        fig, axes = plt.subplots(4, 1, figsize=(18, 16), sharex=True)
+        # Создаем фигуру с общей осью X и дополнительным пространством для виджетов
+        fig = plt.figure(figsize=(18, 17))
+        
+        # Основные графики
+        gs = fig.add_gridspec(5, 1, height_ratios=[1, 1, 1, 1, 0.3], hspace=0.3, top=0.95, bottom=0.08)
+        ax1 = fig.add_subplot(gs[0])
+        ax2 = fig.add_subplot(gs[1], sharex=ax1)
+        ax3 = fig.add_subplot(gs[2], sharex=ax1)
+        ax4 = fig.add_subplot(gs[3], sharex=ax1)
+        
+        axes = [ax1, ax2, ax3, ax4]
+        
+        # Сохраняем исходные границы для кнопки Reset
+        self.original_xlim = None
         
         # График 1: Абсолютная Delta (BTC/ETH)
-        ax1 = axes[0]
         ax1.plot(self.data.index, self.data['delta_abs_15m'], 
                 label='Delta Absolute (15m)', linewidth=1, color='purple', alpha=0.7)
         ax1.plot(self.data.index, self.data['delta_abs_1h'], 
@@ -483,12 +496,134 @@ class BacktestEngine:
         ax4.tick_params(axis='both', labelsize=9)
         
         # Форматирование оси X (только на последнем графике)
-        import matplotlib.dates as mdates
-        ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-        ax4.xaxis.set_major_locator(mdates.MonthLocator(interval=3))  # Каждые 3 месяца
+        ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        ax4.xaxis.set_major_locator(mdates.AutoDateLocator())
         
-        # Настройка пространства между графиками
-        plt.subplots_adjust(left=0.07, right=0.97, top=0.98, bottom=0.05, hspace=0.25)
+        # Сохраняем исходные границы
+        if self.original_xlim is None:
+            self.original_xlim = ax4.get_xlim()
+        
+        # === ИНТЕРАКТИВНЫЕ ВИДЖЕТЫ ДЛЯ ВЫБОРА ДИАПАЗОНА ДАТ ===
+        
+        # Создаем область для виджетов внизу
+        widget_area = fig.add_subplot(gs[4])
+        widget_area.axis('off')
+        
+        # Получаем диапазон дат для подсказок
+        min_date = self.data.index.min()
+        max_date = self.data.index.max()
+        date_format = '%Y-%m-%d %H:%M:%S'
+        
+        # Текстовое поле для Start Date
+        ax_start = plt.axes([0.15, 0.04, 0.15, 0.03])
+        text_start = TextBox(ax_start, 'Start Date: ', 
+                            initial=min_date.strftime(date_format),
+                            color='lightgoldenrodyellow', hovercolor='lightyellow')
+        
+        # Текстовое поле для End Date
+        ax_end = plt.axes([0.40, 0.04, 0.15, 0.03])
+        text_end = TextBox(ax_end, 'End Date: ', 
+                          initial=max_date.strftime(date_format),
+                          color='lightgoldenrodyellow', hovercolor='lightyellow')
+        
+        # Кнопка Apply
+        ax_apply = plt.axes([0.58, 0.04, 0.08, 0.03])
+        btn_apply = Button(ax_apply, 'Apply Range', color='lightblue', hovercolor='skyblue')
+        
+        # Кнопка Reset
+        ax_reset = plt.axes([0.68, 0.04, 0.08, 0.03])
+        btn_reset = Button(ax_reset, 'Reset', color='lightcoral', hovercolor='salmon')
+        
+        # Кнопка Fit to Trades
+        ax_fit = plt.axes([0.78, 0.04, 0.10, 0.03])
+        btn_fit = Button(ax_fit, 'Fit to Trades', color='lightgreen', hovercolor='lightseagreen')
+        
+        # Функция применения диапазона
+        def apply_range(event):
+            try:
+                start_str = text_start.text.strip()
+                end_str = text_end.text.strip()
+                
+                # Пробуем разные форматы дат
+                formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d %H:%M:%S', '%Y/%m/%d']
+                
+                start_date = None
+                end_date = None
+                
+                for fmt in formats:
+                    try:
+                        start_date = pd.to_datetime(start_str, format=fmt)
+                        break
+                    except:
+                        continue
+                
+                for fmt in formats:
+                    try:
+                        end_date = pd.to_datetime(end_str, format=fmt)
+                        break
+                    except:
+                        continue
+                
+                if start_date is None or end_date is None:
+                    print(f"❌ Ошибка: неверный формат даты. Используйте: YYYY-MM-DD HH:MM:SS или YYYY-MM-DD")
+                    return
+                
+                if start_date >= end_date:
+                    print(f"❌ Ошибка: начальная дата должна быть меньше конечной")
+                    return
+                
+                # Применяем новый диапазон ко всем графикам
+                for ax in axes:
+                    ax.set_xlim(mdates.date2num(start_date), mdates.date2num(end_date))
+                
+                fig.canvas.draw_idle()
+                print(f"✓ Применен диапазон: {start_date} - {end_date}")
+                
+            except Exception as e:
+                print(f"❌ Ошибка при применении диапазона: {e}")
+        
+        # Функция сброса к исходному диапазону
+        def reset_range(event):
+            for ax in axes:
+                ax.set_xlim(self.original_xlim)
+            
+            text_start.set_val(min_date.strftime(date_format))
+            text_end.set_val(max_date.strftime(date_format))
+            fig.canvas.draw_idle()
+            print("✓ Диапазон сброшен к исходному")
+        
+        # Функция подгонки к сделкам
+        def fit_to_trades(event):
+            trades_df = pd.DataFrame(self.trades)
+            if len(trades_df) > 0:
+                trade_start = trades_df['timestamp'].min()
+                trade_end = trades_df['timestamp'].max()
+                
+                # Добавляем небольшой отступ (5% от диапазона)
+                time_range = trade_end - trade_start
+                margin = time_range * 0.05
+                
+                fit_start = trade_start - margin
+                fit_end = trade_end + margin
+                
+                for ax in axes:
+                    ax.set_xlim(mdates.date2num(fit_start), mdates.date2num(fit_end))
+                
+                text_start.set_val(fit_start.strftime(date_format))
+                text_end.set_val(fit_end.strftime(date_format))
+                fig.canvas.draw_idle()
+                print(f"✓ Подогнано к сделкам: {fit_start} - {fit_end}")
+        
+        # Привязываем функции к кнопкам
+        btn_apply.on_clicked(apply_range)
+        btn_reset.on_clicked(reset_range)
+        btn_fit.on_clicked(fit_to_trades)
+        
+        # Инструкции для пользователя
+        fig.text(0.01, 0.01, 
+                'Формат даты: YYYY-MM-DD HH:MM:SS или YYYY-MM-DD | '
+                'Также доступны: Zoom (лупа), Pan (крестик), Home в панели инструментов',
+                fontsize=8, style='italic', color='gray')
         
         if self.config.SAVE_CHART:
             plt.savefig(self.config.CHART_FILE, dpi=self.config.CHART_DPI, bbox_inches='tight')
