@@ -377,40 +377,68 @@ class BacktestEngine:
         print("\nСоздание графиков...")
         
         # Создаем фигуру с общей осью X и дополнительным пространством для виджетов
-        fig = plt.figure(figsize=(18, 17))
+        fig = plt.figure(figsize=(18, 20))
         
-        # Основные графики
-        gs = fig.add_gridspec(5, 1, height_ratios=[1, 1, 1, 1, 0.3], hspace=0.3, top=0.95, bottom=0.08)
-        ax1 = fig.add_subplot(gs[0])
-        ax2 = fig.add_subplot(gs[1], sharex=ax1)
-        ax3 = fig.add_subplot(gs[2], sharex=ax1)
-        ax4 = fig.add_subplot(gs[3], sharex=ax1)
+        # Основные графики (увеличено до 6 графиков)
+        gs = fig.add_gridspec(7, 1, height_ratios=[1, 1, 1, 1, 1, 1, 0.3], hspace=0.3, top=0.95, bottom=0.08)
+        ax1 = fig.add_subplot(gs[0])  # Delta Absolute 15m
+        ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Delta Absolute 1H
+        ax3 = fig.add_subplot(gs[2], sharex=ax1)  # Delta % 15m
+        ax4 = fig.add_subplot(gs[3], sharex=ax1)  # Delta % 1H
+        ax5 = fig.add_subplot(gs[4], sharex=ax1)  # Equity curve
+        ax6 = fig.add_subplot(gs[5], sharex=ax1)  # Reserved
         
-        axes = [ax1, ax2, ax3, ax4]
+        axes = [ax1, ax2, ax3, ax4, ax5, ax6]
         
         # Сохраняем исходные границы для кнопки Reset
         self.original_xlim = None
         
-        # График 1: Абсолютная Delta (BTC/ETH)
+        # График 1: Абсолютная Delta 15m (с MA)
         ax1.plot(self.data.index, self.data['delta_abs_15m'], 
-                label='Delta Absolute (15m)', linewidth=1, color='purple', alpha=0.7)
-        ax1.plot(self.data.index, self.data['delta_abs_1h'], 
-                label='Delta Absolute (1H)', linewidth=2, color='blue')
-        ax1.set_title('Абсолютная Delta (BTC/ETH)', fontsize=13, fontweight='bold', pad=12)
+                label='Delta Absolute (15m)', linewidth=1.5, color='purple', alpha=0.8)
+        
+        # Добавляем скользящие средние для 15m
+        sma_short_15m = self.data['delta_abs_15m'].rolling(window=self.config.LEN_SHORT, min_periods=self.config.LEN_SHORT).mean()
+        sma_long_15m = self.data['delta_abs_15m'].rolling(window=self.config.LEN_LONG, min_periods=self.config.LEN_LONG).mean()
+        
+        ax1.plot(self.data.index, sma_short_15m, 
+                label=f'SMA {self.config.LEN_SHORT} (15m)', linewidth=1.5, color='red', alpha=0.7)
+        ax1.plot(self.data.index, sma_long_15m, 
+                label=f'SMA {self.config.LEN_LONG} (15m)', linewidth=1.5, color='blue', alpha=0.7)
+        
+        ax1.set_title('Абсолютная Delta (15 минут) с скользящими средними', fontsize=13, fontweight='bold', pad=12)
         ax1.set_ylabel('Delta (BTC/ETH)', fontsize=10)
         ax1.legend(loc='best', fontsize=9)
         ax1.grid(True, alpha=0.3)
         ax1.tick_params(axis='y', labelsize=9)
         
-        # График 2: Delta % и полосы на 15m (ВСЕ точки входа И выхода)
-        ax2 = axes[1]
-        ax2.plot(self.data.index, self.data['delta_pct_15m'], 
+        # График 2: Абсолютная Delta 1H (с MA)
+        ax2.plot(self.data.index, self.data['delta_abs_1h'], 
+                label='Delta Absolute (1H)', linewidth=1.5, color='darkblue', alpha=0.8)
+        
+        # Добавляем скользящие средние для 1H
+        sma_short_1h = self.data['delta_abs_1h'].rolling(window=self.config.LEN_SHORT, min_periods=self.config.LEN_SHORT).mean()
+        sma_long_1h = self.data['delta_abs_1h'].rolling(window=self.config.LEN_LONG, min_periods=self.config.LEN_LONG).mean()
+        
+        ax2.plot(self.data.index, sma_short_1h, 
+                label=f'SMA {self.config.LEN_SHORT} (1H)', linewidth=1.5, color='red', alpha=0.7)
+        ax2.plot(self.data.index, sma_long_1h, 
+                label=f'SMA {self.config.LEN_LONG} (1H)', linewidth=1.5, color='blue', alpha=0.7)
+        
+        ax2.set_title('Абсолютная Delta (1 час) с скользящими средними', fontsize=13, fontweight='bold', pad=12)
+        ax2.set_ylabel('Delta (BTC/ETH)', fontsize=10)
+        ax2.legend(loc='best', fontsize=9)
+        ax2.grid(True, alpha=0.3)
+        ax2.tick_params(axis='y', labelsize=9)
+        
+        # График 3: Delta % и полосы на 15m (ВСЕ точки входа И выхода)
+        ax3.plot(self.data.index, self.data['delta_pct_15m'], 
                 label='Delta % (15m)', linewidth=1, color='orange')
-        ax2.plot(self.data.index, self.data['upper_2sigma_15m'], 
+        ax3.plot(self.data.index, self.data['upper_2sigma_15m'], 
                 label='+1σ (15m)', linewidth=1, color='green', linestyle='--')
-        ax2.plot(self.data.index, self.data['lower_2sigma_15m'], 
+        ax3.plot(self.data.index, self.data['lower_2sigma_15m'], 
                 label='-1σ (15m)', linewidth=1, color='red', linestyle='--')
-        ax2.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
+        ax3.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
         
         # Отмечаем ВСЕ сделки на 15m графике
         trades_df = pd.DataFrame(self.trades)
@@ -443,70 +471,72 @@ class BacktestEngine:
         # Входы и выходы для лонг позиций
         if len(long_entries) > 0:
             # Для входов в лонг: входим когда delta_pct ВЫШЕ верхней полосы (пересекает сверху)
-            ax2.scatter(long_entries['timestamp'], long_entries['delta_pct'], 
+            ax3.scatter(long_entries['timestamp'], long_entries['delta_pct'], 
                        color='green', marker='^', s=100, label='Long Entry', zorder=5, edgecolors='darkgreen', linewidth=1.5)
         if len(long_exits) > 0:
             # Для выходов из лонга: выходим когда delta_pct НИЖЕ нижней полосы
-            ax2.scatter(long_exits['timestamp'], long_exits['delta_pct'], 
+            ax3.scatter(long_exits['timestamp'], long_exits['delta_pct'], 
                        color='blue', marker='v', s=100, label='Long Exit', zorder=5, edgecolors='darkblue', linewidth=1.5)
         
         # Входы и выходы для шорт позиций
         if len(short_entries) > 0:
             # Для входов в шорт: входим когда delta_pct НИЖЕ нижней полосы (пересекает снизу)
-            ax2.scatter(short_entries['timestamp'], short_entries['delta_pct'], 
+            ax3.scatter(short_entries['timestamp'], short_entries['delta_pct'], 
                        color='red', marker='v', s=100, label='Short Entry', zorder=5, edgecolors='darkred', linewidth=1.5)
         if len(short_exits) > 0:
             # Для выходов из шорта: выходим когда delta_pct ВЫШЕ верхней полосы
-            ax2.scatter(short_exits['timestamp'], short_exits['delta_pct'], 
+            ax3.scatter(short_exits['timestamp'], short_exits['delta_pct'], 
                        color='orange', marker='^', s=100, label='Short Exit', zorder=5, edgecolors='darkorange', linewidth=1.5)
         
-        ax2.set_title('Delta % и полосы ±1σ (15 минут) - Все точки входа и выхода', fontsize=13, fontweight='bold', pad=12)
-        ax2.set_ylabel('Delta %', fontsize=10)
-        ax2.legend(loc='best', fontsize=8, ncol=2)
-        ax2.grid(True, alpha=0.3)
-        ax2.tick_params(axis='y', labelsize=9)
-        
-        # График 3: Delta % на 1H (для наглядности тренда)
-        ax3 = axes[2]
-        ax3.plot(self.data.index, self.data['delta_pct_1h'], 
-                label='Delta % (1H)', linewidth=1, color='blue')
-        ax3.plot(self.data.index, self.data['upper_2sigma_1h'], 
-                label='+1σ (1H)', linewidth=1, color='green', linestyle='--')
-        ax3.plot(self.data.index, self.data['lower_2sigma_1h'], 
-                label='-1σ (1H)', linewidth=1, color='red', linestyle='--')
-        ax3.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
-        ax3.set_title('Delta % и полосы ±1σ (1 час) - Подтверждение тренда', fontsize=13, fontweight='bold', pad=12)
+        ax3.set_title('Delta % и полосы ±1σ (15 минут) - Все точки входа и выхода', fontsize=13, fontweight='bold', pad=12)
         ax3.set_ylabel('Delta %', fontsize=10)
-        ax3.legend(loc='best', fontsize=9)
+        ax3.legend(loc='best', fontsize=8, ncol=2)
         ax3.grid(True, alpha=0.3)
         ax3.tick_params(axis='y', labelsize=9)
         
-        # График 4: Equity curve
-        ax4 = axes[3]
-        equity_curve_df = pd.DataFrame(self.equity_curve)
-        ax4.plot(equity_curve_df['timestamp'], equity_curve_df['equity'], 
-                label='Equity', linewidth=2, color='purple')
-        ax4.axhline(y=self.config.INITIAL_CAPITAL, color='gray', 
-                   linestyle='--', linewidth=1, label='Starting Capital')
-        ax4.set_title('Кривая капитала', fontsize=13, fontweight='bold', pad=12)
-        ax4.set_xlabel('Дата', fontsize=10)
-        ax4.set_ylabel('Капитал', fontsize=10)
+        # График 4: Delta % на 1H (для наглядности тренда)
+        ax4.plot(self.data.index, self.data['delta_pct_1h'], 
+                label='Delta % (1H)', linewidth=1, color='blue')
+        ax4.plot(self.data.index, self.data['upper_2sigma_1h'], 
+                label='+1σ (1H)', linewidth=1, color='green', linestyle='--')
+        ax4.plot(self.data.index, self.data['lower_2sigma_1h'], 
+                label='-1σ (1H)', linewidth=1, color='red', linestyle='--')
+        ax4.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
+        ax4.set_title('Delta % и полосы ±1σ (1 час) - Подтверждение тренда', fontsize=13, fontweight='bold', pad=12)
+        ax4.set_ylabel('Delta %', fontsize=10)
         ax4.legend(loc='best', fontsize=9)
         ax4.grid(True, alpha=0.3)
-        ax4.tick_params(axis='both', labelsize=9)
+        ax4.tick_params(axis='y', labelsize=9)
         
-        # Форматирование оси X (только на последнем графике)
-        ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-        ax4.xaxis.set_major_locator(mdates.AutoDateLocator())
+        # График 5: Equity curve
+        equity_curve_df = pd.DataFrame(self.equity_curve)
+        ax5.plot(equity_curve_df['timestamp'], equity_curve_df['equity'], 
+                label='Equity', linewidth=2, color='purple')
+        ax5.axhline(y=self.config.INITIAL_CAPITAL, color='gray', 
+                   linestyle='--', linewidth=1, label='Starting Capital')
+        ax5.set_title('Кривая капитала', fontsize=13, fontweight='bold', pad=12)
+        ax5.set_xlabel('Дата', fontsize=10)
+        ax5.set_ylabel('Капитал', fontsize=10)
+        ax5.legend(loc='best', fontsize=9)
+        ax5.grid(True, alpha=0.3)
+        ax5.tick_params(axis='both', labelsize=9)
+        
+        # График 6: Оставляем пустым (можно использовать для дополнительной информации)
+        ax6.axis('off')  # Скрываем пока
+        
+        # Форматирование оси X (только на последнем видимом графике)
+        ax5.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        ax5.xaxis.set_major_locator(mdates.AutoDateLocator())
         
         # Сохраняем исходные границы
         if self.original_xlim is None:
-            self.original_xlim = ax4.get_xlim()
+            self.original_xlim = ax5.get_xlim()
+            self.original_ylim_ax1 = ax1.get_ylim()
         
         # === ИНТЕРАКТИВНЫЕ ВИДЖЕТЫ ДЛЯ ВЫБОРА ДИАПАЗОНА ДАТ ===
         
         # Создаем область для виджетов внизу
-        widget_area = fig.add_subplot(gs[4])
+        widget_area = fig.add_subplot(gs[6])
         widget_area.axis('off')
         
         # Получаем диапазон дат для подсказок
