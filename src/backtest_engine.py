@@ -21,6 +21,8 @@ class BacktestEngine:
         """
         self.config = config
         self.data = None
+        self.btc_15m = None
+        self.eth_15m = None
         self.trades = []
         self.equity_curve = []
         
@@ -153,45 +155,116 @@ class BacktestEngine:
         
         # Симулируем торговлю
         equity = self.config.INITIAL_CAPITAL
+        position_open = False
+        entry_data = None
         
         for signal in signals:
+            # Защита от отрицательного капитала
+            if equity <= 0:
+                print(f"\n⚠️ ВНИМАНИЕ: Капитал достиг нуля или отрицательного значения!")
+                print(f"Эмуляция остановлена на {signal['timestamp']}")
+                break
+            
             if 'ENTRY' in signal['type']:
                 # Открытие позиции
-                trade = {
-                    'timestamp': signal['timestamp'],
-                    'type': signal['type'],
-                    'price': signal['price'],
-                    'equity': equity
+                timestamp = signal['timestamp']
+                
+                # Получаем цены BTC и ETH на момент входа
+                btc_price_entry = self.btc_15m.loc[timestamp, 'close']
+                eth_price_entry = self.eth_15m.loc[timestamp, 'close']
+                
+                # Размер позиции = весь текущий капитал, делим пополам на каждую ногу
+                position_size_usd = equity
+                
+                # Сохраняем данные входа
+                entry_data = {
+                    'timestamp_entry': timestamp,
+                    'type_entry': signal['type'],
+                    'delta_pct_entry': signal['price'],
+                    'btc_price_entry': btc_price_entry,
+                    'eth_price_entry': eth_price_entry,
+                    'position_size_usd': position_size_usd,
+                    'equity_before': equity
                 }
-                self.trades.append(trade)
+                position_open = True
                 
-            elif 'EXIT' in signal['type']:
+            elif 'EXIT' in signal['type'] and position_open:
                 # Закрытие позиции
-                entry_price = signal['entry_price']
-                exit_price = signal['price']
+                timestamp = signal['timestamp']
                 
-                # Рассчитываем P&L
-                if 'LONG' in signal['type']:
-                    pnl = exit_price - entry_price
+                # Получаем цены BTC и ETH на момент выхода
+                btc_price_exit = self.btc_15m.loc[timestamp, 'close']
+                eth_price_exit = self.eth_15m.loc[timestamp, 'close']
+                
+                # Определяем тип сделки
+                is_long = 'LONG' in signal['type']
+                
+                if is_long:
+                    # LONG по стратегии = SHORT BTC + LONG ETH
+                    btc_pnl_pct = (entry_data['btc_price_entry'] - btc_price_exit) / entry_data['btc_price_entry'] * 100  # SHORT BTC
+                    eth_pnl_pct = (eth_price_exit - entry_data['eth_price_entry']) / entry_data['eth_price_entry'] * 100  # LONG ETH
                 else:  # SHORT
-                    pnl = entry_price - exit_price
+                    # SHORT по стратегии = LONG BTC + SHORT ETH
+                    btc_pnl_pct = (btc_price_exit - entry_data['btc_price_entry']) / entry_data['btc_price_entry'] * 100  # LONG BTC
+                    eth_pnl_pct = (entry_data['eth_price_entry'] - eth_price_exit) / entry_data['eth_price_entry'] * 100  # SHORT ETH
                 
-                # Применяем комиссию
-                commission = abs(pnl) * self.config.COMMISSION_RATE / 100
-                pnl -= commission
+                # Общий P&L в процентах (среднее от двух ног, так как капитал делится пополам)
+                total_pnl_pct = btc_pnl_pct + eth_pnl_pct
+                
+                # Комиссия в процентах (применяется к общему P&L)
+                commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
+                
+                # Чистый P&L в процентах после комиссии
+                net_pnl_pct = total_pnl_pct - commission_pct
+                
+                # P&L в долларах (применяем к размеру позиции)
+                pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
                 
                 # Обновляем капитал
-                equity += pnl * self.config.POSITION_SIZE_MULTIPLIER
+                equity = entry_data['equity_before'] + pnl_usd
                 
-                trade = {
-                    'timestamp': signal['timestamp'],
-                    'type': signal['type'],
-                    'price': exit_price,
-                    'pnl': pnl,
-                    'commission': commission,
-                    'equity': equity
+                # Записываем сделку о ВХОДЕ (с timestamp входа) - без результатов
+                entry_record = {
+                    'timestamp': entry_data['timestamp_entry'],  # Время ВХОДА
+                    'type': 'LONG_ENTRY' if is_long else 'SHORT_ENTRY',
+                    'delta_pct': entry_data['delta_pct_entry'],
+                    'btc_price': entry_data['btc_price_entry'],
+                    'eth_price': entry_data['eth_price_entry'],
+                    'position_size_usd': entry_data['position_size_usd'],
+                    'equity_before': entry_data['equity_before'],
+                    'btc_pnl_%': None,
+                    'eth_pnl_%': None,
+                    'total_pnl_%': None,
+                    'commission_%': None,
+                    'net_pnl_%': None,
+                    'pnl_usd': None,
+                    'equity_after': None
                 }
-                self.trades.append(trade)
+                
+                # Добавляем запись о входе
+                self.trades.append(entry_record)
+                
+                # Добавляем запись о ВЫХОДЕ (с timestamp выхода) - С РЕЗУЛЬТАТАМИ
+                exit_record = {
+                    'timestamp': timestamp,  # Время ВЫХОДА
+                    'type': 'LONG_EXIT' if is_long else 'SHORT_EXIT',
+                    'delta_pct': signal['price'],
+                    'btc_price': btc_price_exit,
+                    'eth_price': eth_price_exit,
+                    'position_size_usd': entry_data['position_size_usd'],
+                    'equity_before': entry_data['equity_before'],
+                    'btc_pnl_%': btc_pnl_pct,
+                    'eth_pnl_%': eth_pnl_pct,
+                    'total_pnl_%': total_pnl_pct,
+                    'commission_%': commission_pct,
+                    'net_pnl_%': net_pnl_pct,
+                    'pnl_usd': pnl_usd,
+                    'equity_after': equity
+                }
+                self.trades.append(exit_record)
+                
+                position_open = False
+                entry_data = None
             
             # Сохраняем equity после каждого сигнала
             self.equity_curve.append({
@@ -213,48 +286,77 @@ class BacktestEngine:
         
         trades_df = pd.DataFrame(self.trades)
         
-        print(f"\nВсего сделок: {len(trades_df)}")
-        print(f"Входы в лонг: {len(trades_df[trades_df['type'] == 'LONG ENTRY'])}")
-        print(f"Выходы из лонга: {len(trades_df[trades_df['type'] == 'LONG EXIT'])}")
-        print(f"Входы в шорт: {len(trades_df[trades_df['type'] == 'SHORT ENTRY'])}")
-        print(f"Выходы из шорта: {len(trades_df[trades_df['type'] == 'SHORT EXIT'])}")
+        # Фильтруем только записи ВЫХОДОВ (они содержат полную информацию о результатах сделки)
+        exit_trades = trades_df[trades_df['type'].str.contains('EXIT')].copy()
         
-        # Статистика по закрытым сделкам
-        closed_trades = trades_df[trades_df['type'].str.contains('EXIT')].copy()
+        if len(exit_trades) == 0:
+            print("Закрытых сделок не найдено!")
+            return
         
-        if len(closed_trades) > 0:
-            print(f"\nЗакрытых сделок: {len(closed_trades)}")
-            print(f"Прибыльных: {len(closed_trades[closed_trades['pnl'] > 0])}")
-            print(f"Убыточных: {len(closed_trades[closed_trades['pnl'] < 0])}")
-            print(f"Винрейт: {len(closed_trades[closed_trades['pnl'] > 0]) / len(closed_trades) * 100:.2f}%")
-            print(f"\nСредний P&L: {closed_trades['pnl'].mean():.4f}")
-            print(f"Максимальный профит: {closed_trades['pnl'].max():.4f}")
-            print(f"Максимальный убыток: {closed_trades['pnl'].min():.4f}")
-            
-            if self.config.COMMISSION_RATE > 0:
-                total_commission = closed_trades['commission'].sum()
-                print(f"Общая комиссия: {total_commission:.2f}")
-            
-            equity_curve_df = pd.DataFrame(self.equity_curve)
-            final_equity = equity_curve_df['equity'].iloc[-1]
-            
-            print(f"\nНачальный капитал: {self.config.INITIAL_CAPITAL}")
-            print(f"Финальный капитал: {final_equity:.2f}")
-            print(f"Общий доход: {final_equity - self.config.INITIAL_CAPITAL:.2f}")
-            print(f"Доходность: {(final_equity - self.config.INITIAL_CAPITAL) / self.config.INITIAL_CAPITAL * 100:.2f}%")
-            
-            # Максимальная просадка
-            equity_array = equity_curve_df['equity'].values
-            running_max = np.maximum.accumulate(equity_array)
-            drawdown = (equity_array - running_max) / running_max * 100
-            max_drawdown = drawdown.min()
-            print(f"Максимальная просадка: {max_drawdown:.2f}%")
-            
-            # Первые 10 сделок
-            print(f"\n{'='*60}")
-            print("ПЕРВЫЕ 10 СДЕЛОК:")
-            print(f"{'='*60}")
-            print(trades_df.head(10).to_string(index=False))
+        print(f"\nВсего закрытых сделок: {len(exit_trades)}")
+        print(f"Лонг сделок: {len(exit_trades[exit_trades['type'] == 'LONG_EXIT'])}")
+        print(f"Шорт сделок: {len(exit_trades[exit_trades['type'] == 'SHORT_EXIT'])}")
+        
+        # Статистика по сделкам
+        profitable = len(exit_trades[exit_trades['net_pnl_%'] > 0])
+        losing = len(exit_trades[exit_trades['net_pnl_%'] < 0])
+        
+        print(f"\nПрибыльных: {profitable}")
+        print(f"Убыточных: {losing}")
+        print(f"Винрейт: {profitable / len(exit_trades) * 100:.2f}%")
+        
+        print(f"\n{'='*60}")
+        print("СТАТИСТИКА ПО НОГАМ:")
+        print(f"{'='*60}")
+        
+        print(f"\nBTC нога:")
+        print(f"  Средний P&L: {exit_trades['btc_pnl_%'].mean():.4f}%")
+        print(f"  Максимальный профит: {exit_trades['btc_pnl_%'].max():.4f}%")
+        print(f"  Максимальный убыток: {exit_trades['btc_pnl_%'].min():.4f}%")
+        
+        print(f"\nETH нога:")
+        print(f"  Средний P&L: {exit_trades['eth_pnl_%'].mean():.4f}%")
+        print(f"  Максимальный профит: {exit_trades['eth_pnl_%'].max():.4f}%")
+        print(f"  Максимальный убыток: {exit_trades['eth_pnl_%'].min():.4f}%")
+        
+        print(f"\nОбщая статистика:")
+        print(f"  Средний общий P&L: {exit_trades['total_pnl_%'].mean():.4f}%")
+        print(f"  Средний чистый P&L: {exit_trades['net_pnl_%'].mean():.4f}%")
+        print(f"  Максимальный профит: {exit_trades['net_pnl_%'].max():.4f}%")
+        print(f"  Максимальный убыток: {exit_trades['net_pnl_%'].min():.4f}%")
+        
+        if self.config.COMMISSION_RATE > 0:
+            total_commission = exit_trades['commission_%'].sum()
+            print(f"\n  Общая комиссия: {total_commission:.4f}%")
+        
+        print(f"\n  Средний P&L в USD: {exit_trades['pnl_usd'].mean():.2f}")
+        print(f"  Общий P&L в USD: {exit_trades['pnl_usd'].sum():.2f}")
+        
+        equity_curve_df = pd.DataFrame(self.equity_curve)
+        final_equity = equity_curve_df['equity'].iloc[-1]
+        
+        print(f"\n{'='*60}")
+        print("КАПИТАЛ:")
+        print(f"{'='*60}")
+        print(f"Начальный капитал: ${self.config.INITIAL_CAPITAL:,.2f}")
+        print(f"Финальный капитал: ${final_equity:,.2f}")
+        print(f"Общий доход: ${final_equity - self.config.INITIAL_CAPITAL:,.2f}")
+        print(f"Доходность: {(final_equity - self.config.INITIAL_CAPITAL) / self.config.INITIAL_CAPITAL * 100:.2f}%")
+        
+        # Максимальная просадка
+        equity_array = equity_curve_df['equity'].values
+        running_max = np.maximum.accumulate(equity_array)
+        drawdown = (equity_array - running_max) / running_max * 100
+        max_drawdown = drawdown.min()
+        print(f"Максимальная просадка: {max_drawdown:.2f}%")
+        
+        # Первые 5 сделок
+        print(f"\n{'='*60}")
+        print("ПЕРВЫЕ 5 СДЕЛОК:")
+        print(f"{'='*60}")
+        # Выводим только ключевые столбцы для читаемости
+        display_cols = ['timestamp', 'type', 'btc_pnl_%', 'eth_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
+        print(exit_trades[display_cols].head(5).to_string(index=False))
     
     def save_results(self):
         """Сохранение результатов в файлы"""
@@ -299,19 +401,51 @@ class BacktestEngine:
         
         # Отмечаем ВСЕ сделки на 15m графике
         trades_df = pd.DataFrame(self.trades)
-        long_entries = trades_df[trades_df['type'] == 'LONG ENTRY']
-        long_exits = trades_df[trades_df['type'] == 'LONG EXIT']
-        short_entries = trades_df[trades_df['type'] == 'SHORT ENTRY']
-        short_exits = trades_df[trades_df['type'] == 'SHORT EXIT']
         
-        ax2.scatter(long_entries['timestamp'], long_entries['price'], 
-                   color='green', marker='^', s=80, label='Long Entry', zorder=5)
-        ax2.scatter(long_exits['timestamp'], long_exits['price'], 
-                   color='blue', marker='v', s=80, label='Long Exit', zorder=5)
-        ax2.scatter(short_entries['timestamp'], short_entries['price'], 
-                   color='red', marker='v', s=80, label='Short Entry', zorder=5)
-        ax2.scatter(short_exits['timestamp'], short_exits['price'], 
-                   color='orange', marker='^', s=80, label='Short Exit', zorder=5)
+        # Отладочный вывод
+        print(f"\nОтладка визуализации:")
+        print(f"Всего записей в trades: {len(trades_df)}")
+        print(f"Уникальные типы сделок: {trades_df['type'].unique()}")
+        print(f"Количество по типам:")
+        print(trades_df['type'].value_counts())
+        
+        # Разделяем на входы и выходы
+        entry_trades = trades_df[trades_df['type'].str.contains('ENTRY')].copy()
+        exit_trades = trades_df[trades_df['type'].str.contains('EXIT')].copy()
+        
+        print(f"\nВходов (ENTRY): {len(entry_trades)}")
+        print(f"Выходов (EXIT): {len(exit_trades)}")
+        
+        # Разделяем на лонг и шорт
+        long_entries = entry_trades[entry_trades['type'] == 'LONG_ENTRY']
+        short_entries = entry_trades[entry_trades['type'] == 'SHORT_ENTRY']
+        long_exits = exit_trades[exit_trades['type'] == 'LONG_EXIT']
+        short_exits = exit_trades[exit_trades['type'] == 'SHORT_EXIT']
+        
+        print(f"Long entries: {len(long_entries)}")
+        print(f"Short entries: {len(short_entries)}")
+        print(f"Long exits: {len(long_exits)}")
+        print(f"Short exits: {len(short_exits)}")
+        
+        # Входы и выходы для лонг позиций
+        if len(long_entries) > 0:
+            # Для входов в лонг: входим когда delta_pct ВЫШЕ верхней полосы (пересекает сверху)
+            ax2.scatter(long_entries['timestamp'], long_entries['delta_pct'], 
+                       color='green', marker='^', s=100, label='Long Entry', zorder=5, edgecolors='darkgreen', linewidth=1.5)
+        if len(long_exits) > 0:
+            # Для выходов из лонга: выходим когда delta_pct НИЖЕ нижней полосы
+            ax2.scatter(long_exits['timestamp'], long_exits['delta_pct'], 
+                       color='blue', marker='v', s=100, label='Long Exit', zorder=5, edgecolors='darkblue', linewidth=1.5)
+        
+        # Входы и выходы для шорт позиций
+        if len(short_entries) > 0:
+            # Для входов в шорт: входим когда delta_pct НИЖЕ нижней полосы (пересекает снизу)
+            ax2.scatter(short_entries['timestamp'], short_entries['delta_pct'], 
+                       color='red', marker='v', s=100, label='Short Entry', zorder=5, edgecolors='darkred', linewidth=1.5)
+        if len(short_exits) > 0:
+            # Для выходов из шорта: выходим когда delta_pct ВЫШЕ верхней полосы
+            ax2.scatter(short_exits['timestamp'], short_exits['delta_pct'], 
+                       color='orange', marker='^', s=100, label='Short Exit', zorder=5, edgecolors='darkorange', linewidth=1.5)
         
         ax2.set_title('Delta % и полосы ±1σ (15 минут) - Все точки входа и выхода', fontsize=13, fontweight='bold', pad=12)
         ax2.set_ylabel('Delta %', fontsize=10)

@@ -21,6 +21,10 @@ def main():
     # Загрузка данных
     btc_15m, btc_1h, eth_15m, eth_1h = engine.load_data()
     
+    # Сохраняем данные для расчета PnL по ногам
+    engine.btc_15m = btc_15m
+    engine.eth_15m = eth_15m
+    
     # Расчет индикаторов
     data = engine.calculate_indicators(btc_15m, btc_1h, eth_15m, eth_1h)
     engine.data = data  # Сохраняем данные в движке для визуализации
