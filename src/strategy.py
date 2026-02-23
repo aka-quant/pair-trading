@@ -55,6 +55,8 @@ class PairTradingStrategy:
         Проверка условия входа в LONG СПРЕД (Buy BTC, Sell ETH):
         - Z-score < -Z_SCORE_ENTRY (спред ниже среднего, BTC недооценен относительно ETH)
         - Фильтр волатильности: σ_current >= VOLATILITY_THRESHOLD × σ_long
+        - Фильтр коинтеграции: спред должен быть стационарен (ADF тест)
+        - Фильтр mean reversion: Hurst < 0.5
         
         Реальные позиции: LONG BTC + SHORT ETH
         """
@@ -63,10 +65,15 @@ class PairTradingStrategy:
             
         current = self.data.iloc[i]
         
-        # Проверка Z-score (спред слишком низкий, ожидаем возврат вверх)
+        # ФИЛЬТР 1: Коинтеграция - разрешена ли торговля?
+        if self.config.COINTEGRATION_CHECK_ENABLED:
+            if not current['can_trade']:
+                return False  # Спред не коинтегрирован или не mean reverting
+        
+        # ФИЛЬТР 2: Z-score (спред слишком низкий, ожидаем возврат вверх)
         z_condition = current['z_score'] < -self.config.Z_SCORE_ENTRY
         
-        # Проверка фильтра волатильности (входим только в "нервном" рынке)
+        # ФИЛЬТР 3: Волатильность (входим только в "нервном" рынке)
         if self.config.USE_VOLATILITY_FILTER:
             vola_condition = current['sigma_current'] >= (
                 self.config.VOLATILITY_THRESHOLD * current['sigma_long']
@@ -81,6 +88,8 @@ class PairTradingStrategy:
         Проверка условия входа в SHORT СПРЕД (Sell BTC, Buy ETH):
         - Z-score > +Z_SCORE_ENTRY (спред выше среднего, BTC переоценен относительно ETH)
         - Фильтр волатильности: σ_current >= VOLATILITY_THRESHOLD × σ_long
+        - Фильтр коинтеграции: спред должен быть стационарен (ADF тест)
+        - Фильтр mean reversion: Hurst < 0.5
         
         Реальные позиции: SHORT BTC + LONG ETH
         """
@@ -89,10 +98,15 @@ class PairTradingStrategy:
             
         current = self.data.iloc[i]
         
-        # Проверка Z-score (спред слишком высокий, ожидаем возврат вниз)
+        # ФИЛЬТР 1: Коинтеграция - разрешена ли торговля?
+        if self.config.COINTEGRATION_CHECK_ENABLED:
+            if not current['can_trade']:
+                return False  # Спред не коинтегрирован или не mean reverting
+        
+        # ФИЛЬТР 2: Z-score (спред слишком высокий, ожидаем возврат вниз)
         z_condition = current['z_score'] > self.config.Z_SCORE_ENTRY
         
-        # Проверка фильтра волатильности
+        # ФИЛЬТР 3: Волатильность
         if self.config.USE_VOLATILITY_FILTER:
             vola_condition = current['sigma_current'] >= (
                 self.config.VOLATILITY_THRESHOLD * current['sigma_long']

@@ -10,6 +10,7 @@ from matplotlib.widgets import TextBox, Button
 import matplotlib.dates as mdates
 from statsmodels.regression.linear_model import OLS
 from statsmodels.tools import add_constant
+from statsmodels.tsa.stattools import adfuller  # ADF тест для коинтеграции
 
 
 class BacktestEngine:
@@ -84,6 +85,110 @@ class BacktestEngine:
             beta_series.iloc[i] = results.params[1]
         
         return beta_series
+    
+    def calculate_adf_test(self, spread, lookback):
+        """
+        ADF тест (Augmented Dickey-Fuller) - проверка стационарности спреда
+        
+        Проверяет коинтеграцию пары: если спред стационарен, то пара коинтегрирована.
+        "Cointegration beats correlation" - из статьи Amberdata
+        
+        Args:
+            spread: временной ряд спреда
+            lookback: окно данных для теста
+            
+        Returns:
+            Series с p-value ADF теста (< 0.05 = стационарен = коинтегрирован)
+        """
+        adf_pvalue = pd.Series(index=spread.index, dtype=float)
+        
+        for i in range(lookback, len(spread)):
+            # Берем окно данных
+            window_data = spread.iloc[i-lookback:i].values
+            
+            try:
+                # ADF тест: H0 = есть единичный корень (нестационарен)
+                # Если p-value < 0.05, отвергаем H0 → ряд стационарен
+                adf_result = adfuller(window_data, maxlag=1, regression='c', autolag=None)
+                adf_pvalue.iloc[i] = adf_result[1]  # p-value
+            except:
+                adf_pvalue.iloc[i] = 1.0  # В случае ошибки считаем нестационарным
+        
+        return adf_pvalue
+    
+    def calculate_hurst_exponent(self, spread, lookback):
+        """
+        Hurst exponent - проверка mean reversion свойств спреда
+        
+        Интерпретация:
+        - H < 0.5: mean reverting (идеально для парной торговли, лучше < 0.4)
+        - H = 0.5: случайное блуждание (не подходит)
+        - H > 0.5: трендовый (не подходит для mean reversion)
+        
+        Args:
+            spread: временной ряд спреда
+            lookback: окно данных для расчета
+            
+        Returns:
+            Series с Hurst exponent
+        """
+        hurst_series = pd.Series(index=spread.index, dtype=float)
+        
+        for i in range(lookback, len(spread)):
+            # Берем окно данных
+            ts = spread.iloc[i-lookback:i].values
+            
+            try:
+                # Метод R/S (Rescaled Range)
+                lags = range(2, min(20, len(ts) // 2))
+                tau = []
+                
+                for lag in lags:
+                    # Делим на подпериоды
+                    n_subseries = len(ts) // lag
+                    rs_values = []
+                    
+                    for j in range(n_subseries):
+                        subseries = ts[j*lag:(j+1)*lag]
+                        
+                        # Mean
+                        mean = np.mean(subseries)
+                        
+                        # Cumulative deviations
+                        deviations = subseries - mean
+                        cumdev = np.cumsum(deviations)
+                        
+                        # Range
+                        R = np.max(cumdev) - np.min(cumdev)
+                        
+                        # Standard deviation
+                        S = np.std(subseries, ddof=1)
+                        
+                        if S > 0:
+                            rs_values.append(R / S)
+                    
+                    if len(rs_values) > 0:
+                        tau.append(np.mean(rs_values))
+                
+                # Linear regression log(tau) vs log(lags)
+                if len(tau) > 2:
+                    log_lags = np.log(list(lags))
+                    log_tau = np.log(tau)
+                    
+                    # Убираем inf и nan
+                    valid_idx = np.isfinite(log_lags) & np.isfinite(log_tau)
+                    if np.sum(valid_idx) > 2:
+                        poly = np.polyfit(log_lags[valid_idx], log_tau[valid_idx], 1)
+                        hurst = poly[0]  # Наклон = Hurst exponent
+                        hurst_series.iloc[i] = hurst
+                    else:
+                        hurst_series.iloc[i] = 0.5
+                else:
+                    hurst_series.iloc[i] = 0.5
+            except:
+                hurst_series.iloc[i] = 0.5  # В случае ошибки - нейтральное значение
+        
+        return hurst_series
     
     def calculate_indicators(self, btc_data, eth_data):
         """
@@ -171,6 +276,39 @@ class BacktestEngine:
             min_periods=self.config.BETA_LOOKBACK
         ).corr(log_eth)
         
+        # === ШАГ 6: ADF тест - проверка коинтеграции ===
+        # "Cointegration beats correlation" - Amberdata
+        if self.config.USE_ADF_TEST:
+            print("  - ADF тест (проверка стационарности спреда / коинтеграции)...")
+            df['adf_pvalue'] = self.calculate_adf_test(
+                df['spread'], 
+                self.config.ADF_LOOKBACK
+            )
+            # is_cointegrated = True если p-value < порога (спред стационарен)
+            df['is_cointegrated'] = df['adf_pvalue'] < self.config.ADF_PVALUE_THRESHOLD
+        else:
+            df['adf_pvalue'] = 0.0
+            df['is_cointegrated'] = True
+        
+        # === ШАГ 7: Hurst exponent - проверка mean reversion ===
+        if self.config.USE_HURST_FILTER:
+            print("  - Hurst exponent (проверка mean reversion свойств)...")
+            df['hurst'] = self.calculate_hurst_exponent(
+                df['spread'], 
+                self.config.HURST_LOOKBACK
+            )
+            # is_mean_reverting = True если Hurst < порога
+            df['is_mean_reverting'] = df['hurst'] < self.config.HURST_MAX_THRESHOLD
+        else:
+            df['hurst'] = 0.5
+            df['is_mean_reverting'] = True
+        
+        # === КОМБИНИРОВАННЫЙ ФИЛЬТР: Торговать только если коинтегрирован И mean reverting ===
+        if self.config.COINTEGRATION_CHECK_ENABLED:
+            df['can_trade'] = df['is_cointegrated'] & df['is_mean_reverting']
+        else:
+            df['can_trade'] = True
+        
         # Удаляем NaN
         df = df.dropna()
         
@@ -186,6 +324,30 @@ class BacktestEngine:
         print(f"Z-score (мин/макс): {df['z_score'].min():.2f} / {df['z_score'].max():.2f}")
         print(f"Спред (среднее): {df['spread'].mean():.6f}")
         print(f"Спред (std): {df['spread'].std():.6f}")
+        
+        # Статистика коинтеграции
+        if self.config.USE_ADF_TEST:
+            cointegrated_pct = df['is_cointegrated'].sum() / len(df) * 100
+            print(f"\n=== КОИНТЕГРАЦИЯ (ADF тест) ===")
+            print(f"ADF p-value (среднее): {df['adf_pvalue'].mean():.4f}")
+            print(f"Коинтегрирован: {cointegrated_pct:.1f}% времени")
+            print(f"  (p-value < {self.config.ADF_PVALUE_THRESHOLD} = стационарен)")
+        
+        # Статистика Hurst
+        if self.config.USE_HURST_FILTER:
+            mean_reverting_pct = df['is_mean_reverting'].sum() / len(df) * 100
+            print(f"\n=== MEAN REVERSION (Hurst exponent) ===")
+            print(f"Hurst (среднее): {df['hurst'].mean():.4f}")
+            print(f"Hurst (мин/макс): {df['hurst'].min():.4f} / {df['hurst'].max():.4f}")
+            print(f"Mean reverting: {mean_reverting_pct:.1f}% времени")
+            print(f"  (Hurst < {self.config.HURST_MAX_THRESHOLD} = mean reverting)")
+        
+        # Общая статистика торговли
+        if self.config.COINTEGRATION_CHECK_ENABLED:
+            can_trade_pct = df['can_trade'].sum() / len(df) * 100
+            print(f"\n=== РАЗРЕШЕНА ТОРГОВЛЯ ===")
+            print(f"Можно торговать: {can_trade_pct:.1f}% времени")
+            print(f"  (коинтегрирован И mean reverting)")
         
         return df
     

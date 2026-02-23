@@ -31,6 +31,24 @@ MIN_CORRELATION = 0.7  # Минимальная корреляция для от
 MIN_BETA = 0.0  # Минимальная beta
 MAX_BETA = 10.0  # Максимальная beta
 
+# === Параметры коинтеграции и стационарности ===
+# "Cointegration beats correlation" - из статьи Amberdata
+
+# ADF тест (Augmented Dickey-Fuller) - проверка стационарности спреда
+USE_ADF_TEST = True  # Использовать ADF тест для проверки коинтеграции
+ADF_PVALUE_THRESHOLD = 0.05  # Порог p-value для ADF теста (< 0.05 = стационарен)
+ADF_LOOKBACK = 60  # Окно данных для ADF теста
+
+# Hurst exponent - проверка mean reversion свойств
+USE_HURST_FILTER = True  # Использовать Hurst exponent для проверки mean reversion
+HURST_MAX_THRESHOLD = 0.5  # Максимальный Hurst (< 0.5 = mean reverting, идеально < 0.4)
+HURST_LOOKBACK = 60  # Окно данных для расчета Hurst
+
+# Динамическая проверка коинтеграции
+COINTEGRATION_CHECK_ENABLED = True  # Включить динамическую проверку
+COINTEGRATION_CHECK_PERIOD = 60  # Частота проверки коинтеграции (баров)
+# Если спред перестал быть коинтегрированным - отключаем торговлю
+
 # === Параметры бэктеста ===
 INITIAL_CAPITAL = 10000  # Начальный капитал в долларах
 COMMISSION_RATE = 0.0    # Комиссия за сделку в процентах (0.0 = без комиссии, 0.1 = 0.1%)
