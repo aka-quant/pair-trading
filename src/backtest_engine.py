@@ -1,5 +1,6 @@
 """
-Движок бэктестирования торговых стратегий
+Движок бэктестирования для стратегии "Парная торговля 2.0"
+Реализация на основе статьи smart-lab.ru/mobile/topic/1265846/
 """
 
 import pandas as pd
@@ -7,11 +8,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import TextBox, Button
 import matplotlib.dates as mdates
+from statsmodels.regression.linear_model import OLS
+from statsmodels.tools import add_constant
 
 
 class BacktestEngine:
     """
-    Универсальный движок для бэктестирования торговых стратегий
+    Движок для бэктестирования стратегии парного трейдинга с Z-score
     """
     
     def __init__(self, config):
@@ -23,8 +26,8 @@ class BacktestEngine:
         """
         self.config = config
         self.data = None
-        self.btc_15m = None
-        self.eth_15m = None
+        self.btc_data = None
+        self.eth_data = None
         self.trades = []
         self.equity_curve = []
         
@@ -32,114 +35,157 @@ class BacktestEngine:
         """Загрузка и подготовка данных"""
         print("Загрузка данных...")
         
-        # BTC данные
-        btc_15m = pd.read_csv(self.config.BTC_15M_FILE)
-        btc_1h = pd.read_csv(self.config.BTC_1H_FILE)
-        
-        # ETH данные
-        eth_15m = pd.read_csv(self.config.ETH_15M_FILE)
-        eth_1h = pd.read_csv(self.config.ETH_1H_FILE)
+        # Загрузка данных
+        btc_data = pd.read_csv(self.config.BTC_1H_FILE)
+        eth_data = pd.read_csv(self.config.ETH_1H_FILE)
         
         # Конвертируем timestamp в datetime
-        for df in [btc_15m, btc_1h, eth_15m, eth_1h]:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df.set_index('timestamp', inplace=True)
+        btc_data['timestamp'] = pd.to_datetime(btc_data['timestamp'])
+        eth_data['timestamp'] = pd.to_datetime(eth_data['timestamp'])
         
-        print(f"BTC 15m: {len(btc_15m)} свечей")
-        print(f"BTC 1H: {len(btc_1h)} свечей")
-        print(f"ETH 15m: {len(eth_15m)} свечей")
-        print(f"ETH 1H: {len(eth_1h)} свечей")
+        btc_data.set_index('timestamp', inplace=True)
+        eth_data.set_index('timestamp', inplace=True)
         
-        return btc_15m, btc_1h, eth_15m, eth_1h
+        print(f"BTC 1H: {len(btc_data)} свечей")
+        print(f"ETH 1H: {len(eth_data)} свечей")
+        print(f"Период: с {btc_data.index[0]} по {btc_data.index[-1]}")
+        
+        # Сохраняем для расчета PnL
+        self.btc_data = btc_data
+        self.eth_data = eth_data
+        
+        return btc_data, eth_data
     
-    def calculate_indicators(self, btc_15m, btc_1h, eth_15m, eth_1h):
+    def calculate_beta(self, log_btc, log_eth, lookback):
         """
-        Расчет индикаторов для обоих таймфреймов
+        Расчет Beta через OLS регрессию: β = Cov(log(PA), log(PB)) / Var(log(PB))
+        
+        Args:
+            log_btc: логарифмы цен BTC
+            log_eth: логарифмы цен ETH
+            lookback: окно для расчета
+            
+        Returns:
+            Series с beta коэффициентами
+        """
+        beta_series = pd.Series(index=log_btc.index, dtype=float)
+        
+        for i in range(lookback, len(log_btc)):
+            # Берем окно данных
+            y = log_btc.iloc[i-lookback:i].values
+            x = log_eth.iloc[i-lookback:i].values
+            
+            # OLS регрессия
+            X = add_constant(x)
+            model = OLS(y, X)
+            results = model.fit()
+            
+            # Beta - это коэффициент при x (индекс 1)
+            beta_series.iloc[i] = results.params[1]
+        
+        return beta_series
+    
+    def calculate_indicators(self, btc_data, eth_data):
+        """
+        Расчет всех индикаторов для стратегии:
+        1. Beta (β) через OLS регрессию
+        2. Логарифмический спред = log(BTC) - β × log(ETH)
+        3. Z-score спреда
+        4. Волатильности для фильтра
         
         Returns:
-            DataFrame с индикаторами и данными для бэктеста
+            DataFrame с индикаторами
         """
-        print("\nРасчет индикаторов...")
+        print("\nРасчет индикаторов стратегии...")
         
-        # 15-минутный таймфрейм
-        indicators_15m = self._calculate_delta_indicators(
-            btc_15m, eth_15m,
-            self.config.LEN_LONG,
-            self.config.LEN_SHORT,
-            self.config.MEDIAN_PERIOD
-        )
+        # Создаем DataFrame для индикаторов
+        df = pd.DataFrame(index=btc_data.index)
         
-        # Часовой таймфрейм
-        indicators_1h = self._calculate_delta_indicators(
-            btc_1h, eth_1h,
-            self.config.LEN_LONG,
-            self.config.LEN_SHORT,
-            self.config.MEDIAN_PERIOD
-        )
+        # Цены закрытия
+        df['btc_close'] = btc_data['close']
+        df['eth_close'] = eth_data['close']
         
-        # Объединяем данные 1H в 15m (forward fill)
-        indicators_1h_resampled = indicators_1h.reindex(indicators_15m.index, method='ffill')
+        # === ШАГ 1: Расчет Beta через OLS ===
+        print("  - Расчет Beta (hedge ratio) через OLS регрессию...")
+        log_btc = np.log(btc_data['close'])
+        log_eth = np.log(eth_data['close'])
         
-        # Объединяем в один датафрейм
-        data = pd.DataFrame(index=indicators_15m.index)
+        if self.config.USE_ROLLING_BETA:
+            # Rolling beta - адаптируется к изменению корреляции
+            df['beta'] = self.calculate_beta(log_btc, log_eth, self.config.BETA_LOOKBACK)
+        else:
+            # Фиксированная beta на всем периоде
+            X = add_constant(log_eth.values)
+            model = OLS(log_btc.values, X)
+            results = model.fit()
+            fixed_beta = results.params[1]
+            df['beta'] = fixed_beta
+            print(f"    Фиксированная Beta = {fixed_beta:.4f}")
         
-        # Абсолютная дельта (BTC/ETH)
-        data['delta_abs_15m'] = indicators_15m['delta']
-        data['delta_abs_1h'] = indicators_1h_resampled['delta']
+        # === ШАГ 2: Расчет спреда ===
+        print("  - Расчет логарифмического спреда...")
+        # Спред = log(PA) - β × log(PB)
+        df['log_btc'] = log_btc
+        df['log_eth'] = log_eth
+        df['spread'] = log_btc - df['beta'] * log_eth
         
-        # Относительная дельта (%)
-        data['delta_pct_15m'] = indicators_15m['delta_pct']
-        data['upper_2sigma_15m'] = indicators_15m['upper_2sigma']
-        data['lower_2sigma_15m'] = indicators_15m['lower_2sigma']
+        # === ШАГ 3: Расчет статистик спреда (μ, σ) на скользящем окне ===
+        print("  - Расчет среднего и стандартного отклонения спреда...")
+        df['spread_mean'] = df['spread'].rolling(
+            window=self.config.SPREAD_LOOKBACK, 
+            min_periods=self.config.SPREAD_LOOKBACK
+        ).mean()
         
-        data['delta_pct_1h'] = indicators_1h_resampled['delta_pct']
-        data['upper_2sigma_1h'] = indicators_1h_resampled['upper_2sigma']
-        data['lower_2sigma_1h'] = indicators_1h_resampled['lower_2sigma']
+        df['spread_std'] = df['spread'].rolling(
+            window=self.config.SPREAD_LOOKBACK, 
+            min_periods=self.config.SPREAD_LOOKBACK
+        ).std()
         
-        # Удаляем NaN значения
-        data = data.dropna()
+        # === ШАГ 4: Расчет Z-score ===
+        print("  - Расчет Z-score...")
+        # Z = (Спред - μ) / σ
+        df['z_score'] = (df['spread'] - df['spread_mean']) / df['spread_std']
         
-        print(f"Данные для бэктеста: {len(data)} свечей")
-        print(f"Период: с {data.index[0]} по {data.index[-1]}")
+        # === ШАГ 5: Фильтр волатильности ===
+        if self.config.USE_VOLATILITY_FILTER:
+            print("  - Расчет фильтра волатильности...")
+            # Текущая волатильность (короткое окно)
+            df['sigma_current'] = df['spread'].rolling(
+                window=self.config.SPREAD_LOOKBACK, 
+                min_periods=self.config.SPREAD_LOOKBACK
+            ).std()
+            
+            # Долгосрочная волатильность
+            df['sigma_long'] = df['spread'].rolling(
+                window=self.config.VOLATILITY_LONG_LOOKBACK, 
+                min_periods=self.config.VOLATILITY_LONG_LOOKBACK
+            ).std()
+        else:
+            df['sigma_current'] = 1.0
+            df['sigma_long'] = 1.0
         
-        return data
-    
-    def _calculate_delta_indicators(self, btc_df, eth_df, len_long, len_short, median_period):
-        """
-        Рассчитывает delta % и полосы ±2σ на основе индикаторов из TradingView
-        """
-        df = pd.DataFrame(index=btc_df.index)
+        # Корреляция для информации
+        print("  - Расчет корреляции...")
+        df['correlation'] = log_btc.rolling(
+            window=self.config.BETA_LOOKBACK, 
+            min_periods=self.config.BETA_LOOKBACK
+        ).corr(log_eth)
         
-        # Delta Calculation (абсолютная)
-        delta = btc_df['close'] / eth_df['close']
+        # Удаляем NaN
+        df = df.dropna()
         
-        # SMA Reference (долгосрочная MA для дельты)
-        sma_ref = delta.rolling(window=len_long, min_periods=len_long).mean()
+        print(f"\nДанные готовы для бэктеста: {len(df)} свечей")
+        print(f"Период: с {df.index[0]} по {df.index[-1]}")
         
-        # Delta % (относительное отклонение от долгосрочной MA)
-        delta_pct = (delta - sma_ref) / sma_ref * 100
-        
-        # Moving Averages на delta_pct
-        sma_long = delta_pct.rolling(window=len_long, min_periods=len_long).mean()
-        sma_short = delta_pct.rolling(window=len_short, min_periods=len_short).mean()
-        
-        # Median and StdDev
-        median_val = delta_pct.rolling(window=median_period, min_periods=median_period).median()
-        std_dev_val = delta_pct.rolling(window=median_period, min_periods=median_period).std()
-        
-        # Bands ±2σ
-        upper_band_2 = median_val + self.config.SIGMA_THRESHOLD * std_dev_val
-        lower_band_2 = median_val - self.config.SIGMA_THRESHOLD * std_dev_val
-        
-        # Сохраняем результаты
-        df['delta'] = delta
-        df['delta_pct'] = delta_pct
-        df['sma_long'] = sma_long
-        df['sma_short'] = sma_short
-        df['median'] = median_val
-        df['std_dev'] = std_dev_val
-        df['upper_2sigma'] = upper_band_2
-        df['lower_2sigma'] = lower_band_2
+        # Статистика
+        print(f"\n=== СТАТИСТИКА ИНДИКАТОРОВ ===")
+        if self.config.USE_ROLLING_BETA:
+            print(f"Beta (среднее): {df['beta'].mean():.4f}")
+            print(f"Beta (мин/макс): {df['beta'].min():.4f} / {df['beta'].max():.4f}")
+        print(f"Корреляция (среднее): {df['correlation'].mean():.4f}")
+        print(f"Z-score (мин/макс): {df['z_score'].min():.2f} / {df['z_score'].max():.2f}")
+        print(f"Спред (среднее): {df['spread'].mean():.6f}")
+        print(f"Спред (std): {df['spread'].std():.6f}")
         
         return df
     
@@ -150,10 +196,14 @@ class BacktestEngine:
         Args:
             strategy: объект стратегии с методом generate_signals()
         """
-        print("\nЗапуск бэктеста...")
+        print("\n" + "="*60)
+        print("ЗАПУСК БЭКТЕСТА")
+        print("="*60)
         
         # Генерируем сигналы
         signals = strategy.generate_signals()
+        
+        print(f"Сгенерировано сигналов: {len(signals)}")
         
         # Симулируем торговлю
         equity = self.config.INITIAL_CAPITAL
@@ -163,26 +213,28 @@ class BacktestEngine:
         for signal in signals:
             # Защита от отрицательного капитала
             if equity <= 0:
-                print(f"\n⚠️ ВНИМАНИЕ: Капитал достиг нуля или отрицательного значения!")
-                print(f"Эмуляция остановлена на {signal['timestamp']}")
+                print(f"\n⚠️ ВНИМАНИЕ: Капитал достиг нуля!")
+                print(f"Остановка на {signal['timestamp']}")
                 break
             
             if 'ENTRY' in signal['type']:
                 # Открытие позиции
                 timestamp = signal['timestamp']
                 
-                # Получаем цены BTC и ETH на момент входа
-                btc_price_entry = self.btc_15m.loc[timestamp, 'close']
-                eth_price_entry = self.eth_15m.loc[timestamp, 'close']
+                # Получаем цены на момент входа
+                btc_price_entry = self.btc_data.loc[timestamp, 'close']
+                eth_price_entry = self.eth_data.loc[timestamp, 'close']
                 
-                # Размер позиции = весь текущий капитал, делим пополам на каждую ногу
+                # Размер позиции = весь капитал
                 position_size_usd = equity
                 
                 # Сохраняем данные входа
                 entry_data = {
                     'timestamp_entry': timestamp,
                     'type_entry': signal['type'],
-                    'delta_pct_entry': signal['price'],
+                    'spread_entry': signal['spread'],
+                    'z_score_entry': signal['z_score'],
+                    'beta': signal['beta'],
                     'btc_price_entry': btc_price_entry,
                     'eth_price_entry': eth_price_entry,
                     'position_size_usd': position_size_usd,
@@ -194,42 +246,42 @@ class BacktestEngine:
                 # Закрытие позиции
                 timestamp = signal['timestamp']
                 
-                # Получаем цены BTC и ETH на момент выхода
-                btc_price_exit = self.btc_15m.loc[timestamp, 'close']
-                eth_price_exit = self.eth_15m.loc[timestamp, 'close']
+                # Получаем цены на момент выхода
+                btc_price_exit = self.btc_data.loc[timestamp, 'close']
+                eth_price_exit = self.eth_data.loc[timestamp, 'close']
                 
                 # Определяем тип сделки
-                is_long = 'LONG' in signal['type']
+                is_long_spread = 'LONG' in signal['type']
                 
-                if is_long:
-                    # LONG по стратегии = SHORT BTC + LONG ETH
-                    btc_pnl_pct = (entry_data['btc_price_entry'] - btc_price_exit) / entry_data['btc_price_entry'] * 100  # SHORT BTC
-                    eth_pnl_pct = (eth_price_exit - entry_data['eth_price_entry']) / entry_data['eth_price_entry'] * 100  # LONG ETH
-                else:  # SHORT
-                    # SHORT по стратегии = LONG BTC + SHORT ETH
-                    btc_pnl_pct = (btc_price_exit - entry_data['btc_price_entry']) / entry_data['btc_price_entry'] * 100  # LONG BTC
-                    eth_pnl_pct = (entry_data['eth_price_entry'] - eth_price_exit) / entry_data['eth_price_entry'] * 100  # SHORT ETH
+                if is_long_spread:
+                    # LONG SPREAD = BUY BTC + SELL ETH
+                    btc_pnl_pct = (btc_price_exit - entry_data['btc_price_entry']) / entry_data['btc_price_entry'] * 100
+                    eth_pnl_pct = (entry_data['eth_price_entry'] - eth_price_exit) / entry_data['eth_price_entry'] * 100
+                else:
+                    # SHORT SPREAD = SELL BTC + BUY ETH
+                    btc_pnl_pct = (entry_data['btc_price_entry'] - btc_price_exit) / entry_data['btc_price_entry'] * 100
+                    eth_pnl_pct = (eth_price_exit - entry_data['eth_price_entry']) / entry_data['eth_price_entry'] * 100
                 
-                # Общий P&L в процентах (среднее от двух ног, так как капитал делится пополам)
+                # Общий P&L (среднее от двух ног)
                 total_pnl_pct = btc_pnl_pct + eth_pnl_pct
                 
-                # Комиссия в процентах (применяется к общему P&L)
+                # Комиссия
                 commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
-                
-                # Чистый P&L в процентах после комиссии
                 net_pnl_pct = total_pnl_pct - commission_pct
                 
-                # P&L в долларах (применяем к размеру позиции)
+                # P&L в долларах
                 pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
                 
                 # Обновляем капитал
                 equity = entry_data['equity_before'] + pnl_usd
                 
-                # Записываем сделку о ВХОДЕ (с timestamp входа) - без результатов
+                # Записываем вход
                 entry_record = {
-                    'timestamp': entry_data['timestamp_entry'],  # Время ВХОДА
-                    'type': 'LONG_ENTRY' if is_long else 'SHORT_ENTRY',
-                    'delta_pct': entry_data['delta_pct_entry'],
+                    'timestamp': entry_data['timestamp_entry'],
+                    'type': entry_data['type_entry'],
+                    'spread': entry_data['spread_entry'],
+                    'z_score': entry_data['z_score_entry'],
+                    'beta': entry_data['beta'],
                     'btc_price': entry_data['btc_price_entry'],
                     'eth_price': entry_data['eth_price_entry'],
                     'position_size_usd': entry_data['position_size_usd'],
@@ -242,15 +294,15 @@ class BacktestEngine:
                     'pnl_usd': None,
                     'equity_after': None
                 }
-                
-                # Добавляем запись о входе
                 self.trades.append(entry_record)
                 
-                # Добавляем запись о ВЫХОДЕ (с timestamp выхода) - С РЕЗУЛЬТАТАМИ
+                # Записываем выход с результатами
                 exit_record = {
-                    'timestamp': timestamp,  # Время ВЫХОДА
-                    'type': 'LONG_EXIT' if is_long else 'SHORT_EXIT',
-                    'delta_pct': signal['price'],
+                    'timestamp': timestamp,
+                    'type': signal['type'],
+                    'spread': signal['spread'],
+                    'z_score': signal['z_score'],
+                    'beta': signal['beta'],
                     'btc_price': btc_price_exit,
                     'eth_price': eth_price_exit,
                     'position_size_usd': entry_data['position_size_usd'],
@@ -268,7 +320,7 @@ class BacktestEngine:
                 position_open = False
                 entry_data = None
             
-            # Сохраняем equity после каждого сигнала
+            # Сохраняем equity
             self.equity_curve.append({
                 'timestamp': signal['timestamp'],
                 'equity': equity
@@ -288,7 +340,7 @@ class BacktestEngine:
         
         trades_df = pd.DataFrame(self.trades)
         
-        # Фильтруем только записи ВЫХОДОВ (они содержат полную информацию о результатах сделки)
+        # Только выходы
         exit_trades = trades_df[trades_df['type'].str.contains('EXIT')].copy()
         
         if len(exit_trades) == 0:
@@ -296,10 +348,10 @@ class BacktestEngine:
             return
         
         print(f"\nВсего закрытых сделок: {len(exit_trades)}")
-        print(f"Лонг сделок: {len(exit_trades[exit_trades['type'] == 'LONG_EXIT'])}")
-        print(f"Шорт сделок: {len(exit_trades[exit_trades['type'] == 'SHORT_EXIT'])}")
+        print(f"Long спред сделок: {len(exit_trades[exit_trades['type'] == 'LONG_SPREAD_EXIT'])}")
+        print(f"Short спред сделок: {len(exit_trades[exit_trades['type'] == 'SHORT_SPREAD_EXIT'])}")
         
-        # Статистика по сделкам
+        # Статистика
         profitable = len(exit_trades[exit_trades['net_pnl_%'] > 0])
         losing = len(exit_trades[exit_trades['net_pnl_%'] < 0])
         
@@ -313,347 +365,149 @@ class BacktestEngine:
         
         print(f"\nBTC нога:")
         print(f"  Средний P&L: {exit_trades['btc_pnl_%'].mean():.4f}%")
-        print(f"  Максимальный профит: {exit_trades['btc_pnl_%'].max():.4f}%")
-        print(f"  Максимальный убыток: {exit_trades['btc_pnl_%'].min():.4f}%")
+        print(f"  Макс профит: {exit_trades['btc_pnl_%'].max():.4f}%")
+        print(f"  Макс убыток: {exit_trades['btc_pnl_%'].min():.4f}%")
         
         print(f"\nETH нога:")
         print(f"  Средний P&L: {exit_trades['eth_pnl_%'].mean():.4f}%")
-        print(f"  Максимальный профит: {exit_trades['eth_pnl_%'].max():.4f}%")
-        print(f"  Максимальный убыток: {exit_trades['eth_pnl_%'].min():.4f}%")
+        print(f"  Макс профит: {exit_trades['eth_pnl_%'].max():.4f}%")
+        print(f"  Макс убыток: {exit_trades['eth_pnl_%'].min():.4f}%")
         
         print(f"\nОбщая статистика:")
         print(f"  Средний общий P&L: {exit_trades['total_pnl_%'].mean():.4f}%")
         print(f"  Средний чистый P&L: {exit_trades['net_pnl_%'].mean():.4f}%")
-        print(f"  Максимальный профит: {exit_trades['net_pnl_%'].max():.4f}%")
-        print(f"  Максимальный убыток: {exit_trades['net_pnl_%'].min():.4f}%")
+        print(f"  Макс профит: {exit_trades['net_pnl_%'].max():.4f}%")
+        print(f"  Макс убыток: {exit_trades['net_pnl_%'].min():.4f}%")
         
         if self.config.COMMISSION_RATE > 0:
-            total_commission = exit_trades['commission_%'].sum()
-            print(f"\n  Общая комиссия: {total_commission:.4f}%")
+            print(f"\n  Общая комиссия: {exit_trades['commission_%'].sum():.4f}%")
         
         print(f"\n  Средний P&L в USD: {exit_trades['pnl_usd'].mean():.2f}")
         print(f"  Общий P&L в USD: {exit_trades['pnl_usd'].sum():.2f}")
         
-        equity_curve_df = pd.DataFrame(self.equity_curve)
-        final_equity = equity_curve_df['equity'].iloc[-1]
-        
-        print(f"\n{'='*60}")
-        print("КАПИТАЛ:")
-        print(f"{'='*60}")
-        print(f"Начальный капитал: ${self.config.INITIAL_CAPITAL:,.2f}")
-        print(f"Финальный капитал: ${final_equity:,.2f}")
-        print(f"Общий доход: ${final_equity - self.config.INITIAL_CAPITAL:,.2f}")
-        print(f"Доходность: {(final_equity - self.config.INITIAL_CAPITAL) / self.config.INITIAL_CAPITAL * 100:.2f}%")
-        
-        # Максимальная просадка
-        equity_array = equity_curve_df['equity'].values
-        running_max = np.maximum.accumulate(equity_array)
-        drawdown = (equity_array - running_max) / running_max * 100
-        max_drawdown = drawdown.min()
-        print(f"Максимальная просадка: {max_drawdown:.2f}%")
+        # Капитал
+        if len(self.equity_curve) > 0:
+            equity_curve_df = pd.DataFrame(self.equity_curve)
+            final_equity = equity_curve_df['equity'].iloc[-1]
+            
+            print(f"\n{'='*60}")
+            print("КАПИТАЛ:")
+            print(f"{'='*60}")
+            print(f"Начальный капитал: ${self.config.INITIAL_CAPITAL:,.2f}")
+            print(f"Финальный капитал: ${final_equity:,.2f}")
+            print(f"Общий доход: ${final_equity - self.config.INITIAL_CAPITAL:,.2f}")
+            print(f"Доходность: {(final_equity - self.config.INITIAL_CAPITAL) / self.config.INITIAL_CAPITAL * 100:.2f}%")
+            
+            # Просадка
+            equity_array = equity_curve_df['equity'].values
+            running_max = np.maximum.accumulate(equity_array)
+            drawdown = (equity_array - running_max) / running_max * 100
+            max_drawdown = drawdown.min()
+            print(f"Макс просадка: {max_drawdown:.2f}%")
         
         # Первые 5 сделок
         print(f"\n{'='*60}")
         print("ПЕРВЫЕ 5 СДЕЛОК:")
         print(f"{'='*60}")
-        # Выводим только ключевые столбцы для читаемости
-        display_cols = ['timestamp', 'type', 'btc_pnl_%', 'eth_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
+        display_cols = ['timestamp', 'type', 'z_score', 'btc_pnl_%', 'eth_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
         print(exit_trades[display_cols].head(5).to_string(index=False))
     
     def save_results(self):
-        """Сохранение результатов в файлы"""
+        """Сохранение результатов"""
         if self.config.SAVE_TRADES_LOG and len(self.trades) > 0:
             trades_df = pd.DataFrame(self.trades)
-            # Сохраняем в формате Excel - данные будут сразу в столбцах при открытии
             trades_df.to_excel(self.config.TRADES_LOG_FILE, index=False, engine='openpyxl')
             print(f"\nСделки сохранены в '{self.config.TRADES_LOG_FILE}'")
     
     def plot_results(self):
-        """Визуализация результатов бэктеста"""
+        """Визуализация результатов"""
         if len(self.trades) == 0:
             print("Нет данных для визуализации")
             return
         
         print("\nСоздание графиков...")
         
-        # Создаем фигуру с общей осью X и дополнительным пространством для виджетов
-        fig = plt.figure(figsize=(18, 20))
+        fig = plt.figure(figsize=(18, 16))
+        gs = fig.add_gridspec(5, 1, height_ratios=[1, 1, 1, 1, 0.2], hspace=0.3, top=0.95, bottom=0.08)
         
-        # Основные графики (увеличено до 6 графиков)
-        gs = fig.add_gridspec(7, 1, height_ratios=[1, 1, 1, 1, 1, 1, 0.3], hspace=0.3, top=0.95, bottom=0.08)
-        ax1 = fig.add_subplot(gs[0])  # Delta Absolute 15m
-        ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Delta Absolute 1H
-        ax3 = fig.add_subplot(gs[2], sharex=ax1)  # Delta % 15m
-        ax4 = fig.add_subplot(gs[3], sharex=ax1)  # Delta % 1H
-        ax5 = fig.add_subplot(gs[4], sharex=ax1)  # Equity curve
-        ax6 = fig.add_subplot(gs[5], sharex=ax1)  # Reserved
+        ax1 = fig.add_subplot(gs[0])  # Beta
+        ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Spread
+        ax3 = fig.add_subplot(gs[2], sharex=ax1)  # Z-score + сигналы
+        ax4 = fig.add_subplot(gs[3], sharex=ax1)  # Equity
         
-        axes = [ax1, ax2, ax3, ax4, ax5, ax6]
+        axes = [ax1, ax2, ax3, ax4]
         
-        # Сохраняем исходные границы для кнопки Reset
-        self.original_xlim = None
-        
-        # График 1: Абсолютная Delta 15m (с MA)
-        ax1.plot(self.data.index, self.data['delta_abs_15m'], 
-                label='Delta Absolute (15m)', linewidth=1.5, color='purple', alpha=0.8)
-        
-        # Добавляем скользящие средние для 15m
-        sma_short_15m = self.data['delta_abs_15m'].rolling(window=self.config.LEN_SHORT, min_periods=self.config.LEN_SHORT).mean()
-        sma_long_15m = self.data['delta_abs_15m'].rolling(window=self.config.LEN_LONG, min_periods=self.config.LEN_LONG).mean()
-        
-        ax1.plot(self.data.index, sma_short_15m, 
-                label=f'SMA {self.config.LEN_SHORT} (15m)', linewidth=1.5, color='red', alpha=0.7)
-        ax1.plot(self.data.index, sma_long_15m, 
-                label=f'SMA {self.config.LEN_LONG} (15m)', linewidth=1.5, color='blue', alpha=0.7)
-        
-        ax1.set_title('Абсолютная Delta (15 минут) с скользящими средними', fontsize=13, fontweight='bold', pad=12)
-        ax1.set_ylabel('Delta (BTC/ETH)', fontsize=10)
-        ax1.legend(loc='best', fontsize=9)
+        # График 1: Beta
+        ax1.plot(self.data.index, self.data['beta'], label='Beta (hedge ratio)', linewidth=1.5, color='blue')
+        ax1.axhline(y=1.0, color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
+        ax1.set_title('Beta коэффициент (OLS)', fontsize=13, fontweight='bold')
+        ax1.set_ylabel('Beta', fontsize=10)
+        ax1.legend(loc='best')
         ax1.grid(True, alpha=0.3)
-        ax1.tick_params(axis='y', labelsize=9)
         
-        # График 2: Абсолютная Delta 1H (с MA)
-        ax2.plot(self.data.index, self.data['delta_abs_1h'], 
-                label='Delta Absolute (1H)', linewidth=1.5, color='darkblue', alpha=0.8)
-        
-        # Добавляем скользящие средние для 1H
-        sma_short_1h = self.data['delta_abs_1h'].rolling(window=self.config.LEN_SHORT, min_periods=self.config.LEN_SHORT).mean()
-        sma_long_1h = self.data['delta_abs_1h'].rolling(window=self.config.LEN_LONG, min_periods=self.config.LEN_LONG).mean()
-        
-        ax2.plot(self.data.index, sma_short_1h, 
-                label=f'SMA {self.config.LEN_SHORT} (1H)', linewidth=1.5, color='red', alpha=0.7)
-        ax2.plot(self.data.index, sma_long_1h, 
-                label=f'SMA {self.config.LEN_LONG} (1H)', linewidth=1.5, color='blue', alpha=0.7)
-        
-        ax2.set_title('Абсолютная Delta (1 час) с скользящими средними', fontsize=13, fontweight='bold', pad=12)
-        ax2.set_ylabel('Delta (BTC/ETH)', fontsize=10)
-        ax2.legend(loc='best', fontsize=9)
+        # График 2: Spread
+        ax2.plot(self.data.index, self.data['spread'], label='Log Spread', linewidth=1, color='purple')
+        ax2.plot(self.data.index, self.data['spread_mean'], label='Mean', linewidth=1.5, color='orange', linestyle='--')
+        ax2.fill_between(self.data.index, 
+                         self.data['spread_mean'] - self.data['spread_std'],
+                         self.data['spread_mean'] + self.data['spread_std'],
+                         alpha=0.2, color='orange', label='±1σ')
+        ax2.set_title('Логарифмический спред', fontsize=13, fontweight='bold')
+        ax2.set_ylabel('Spread', fontsize=10)
+        ax2.legend(loc='best')
         ax2.grid(True, alpha=0.3)
-        ax2.tick_params(axis='y', labelsize=9)
         
-        # График 3: Delta % и полосы на 15m (ВСЕ точки входа И выхода)
-        ax3.plot(self.data.index, self.data['delta_pct_15m'], 
-                label='Delta % (15m)', linewidth=1, color='orange')
-        ax3.plot(self.data.index, self.data['upper_2sigma_15m'], 
-                label='+1σ (15m)', linewidth=1, color='green', linestyle='--')
-        ax3.plot(self.data.index, self.data['lower_2sigma_15m'], 
-                label='-1σ (15m)', linewidth=1, color='red', linestyle='--')
+        # График 3: Z-score + сигналы
+        ax3.plot(self.data.index, self.data['z_score'], label='Z-score', linewidth=1, color='darkblue')
+        ax3.axhline(y=self.config.Z_SCORE_ENTRY, color='green', linestyle='--', linewidth=1, label=f'+{self.config.Z_SCORE_ENTRY}σ')
+        ax3.axhline(y=-self.config.Z_SCORE_ENTRY, color='red', linestyle='--', linewidth=1, label=f'-{self.config.Z_SCORE_ENTRY}σ')
         ax3.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
         
-        # Отмечаем ВСЕ сделки на 15m графике
+        # Отмечаем сделки
         trades_df = pd.DataFrame(self.trades)
-        
-        # Отладочный вывод
-        print(f"\nОтладка визуализации:")
-        print(f"Всего записей в trades: {len(trades_df)}")
-        print(f"Уникальные типы сделок: {trades_df['type'].unique()}")
-        print(f"Количество по типам:")
-        print(trades_df['type'].value_counts())
-        
-        # Разделяем на входы и выходы
         entry_trades = trades_df[trades_df['type'].str.contains('ENTRY')].copy()
         exit_trades = trades_df[trades_df['type'].str.contains('EXIT')].copy()
         
-        print(f"\nВходов (ENTRY): {len(entry_trades)}")
-        print(f"Выходов (EXIT): {len(exit_trades)}")
+        long_entries = entry_trades[entry_trades['type'] == 'LONG_SPREAD_ENTRY']
+        short_entries = entry_trades[entry_trades['type'] == 'SHORT_SPREAD_ENTRY']
+        long_exits = exit_trades[exit_trades['type'] == 'LONG_SPREAD_EXIT']
+        short_exits = exit_trades[exit_trades['type'] == 'SHORT_SPREAD_EXIT']
         
-        # Разделяем на лонг и шорт
-        long_entries = entry_trades[entry_trades['type'] == 'LONG_ENTRY']
-        short_entries = entry_trades[entry_trades['type'] == 'SHORT_ENTRY']
-        long_exits = exit_trades[exit_trades['type'] == 'LONG_EXIT']
-        short_exits = exit_trades[exit_trades['type'] == 'SHORT_EXIT']
-        
-        print(f"Long entries: {len(long_entries)}")
-        print(f"Short entries: {len(short_entries)}")
-        print(f"Long exits: {len(long_exits)}")
-        print(f"Short exits: {len(short_exits)}")
-        
-        # Входы и выходы для лонг позиций
         if len(long_entries) > 0:
-            # Для входов в лонг: входим когда delta_pct ВЫШЕ верхней полосы (пересекает сверху)
-            ax3.scatter(long_entries['timestamp'], long_entries['delta_pct'], 
+            ax3.scatter(long_entries['timestamp'], long_entries['z_score'], 
                        color='green', marker='^', s=100, label='Long Entry', zorder=5, edgecolors='darkgreen', linewidth=1.5)
         if len(long_exits) > 0:
-            # Для выходов из лонга: выходим когда delta_pct НИЖЕ нижней полосы
-            ax3.scatter(long_exits['timestamp'], long_exits['delta_pct'], 
+            ax3.scatter(long_exits['timestamp'], long_exits['z_score'], 
                        color='blue', marker='v', s=100, label='Long Exit', zorder=5, edgecolors='darkblue', linewidth=1.5)
-        
-        # Входы и выходы для шорт позиций
         if len(short_entries) > 0:
-            # Для входов в шорт: входим когда delta_pct НИЖЕ нижней полосы (пересекает снизу)
-            ax3.scatter(short_entries['timestamp'], short_entries['delta_pct'], 
+            ax3.scatter(short_entries['timestamp'], short_entries['z_score'], 
                        color='red', marker='v', s=100, label='Short Entry', zorder=5, edgecolors='darkred', linewidth=1.5)
         if len(short_exits) > 0:
-            # Для выходов из шорта: выходим когда delta_pct ВЫШЕ верхней полосы
-            ax3.scatter(short_exits['timestamp'], short_exits['delta_pct'], 
+            ax3.scatter(short_exits['timestamp'], short_exits['z_score'], 
                        color='orange', marker='^', s=100, label='Short Exit', zorder=5, edgecolors='darkorange', linewidth=1.5)
         
-        ax3.set_title('Delta % и полосы ±1σ (15 минут) - Все точки входа и выхода', fontsize=13, fontweight='bold', pad=12)
-        ax3.set_ylabel('Delta %', fontsize=10)
+        ax3.set_title('Z-score и торговые сигналы', fontsize=13, fontweight='bold')
+        ax3.set_ylabel('Z-score', fontsize=10)
         ax3.legend(loc='best', fontsize=8, ncol=2)
         ax3.grid(True, alpha=0.3)
-        ax3.tick_params(axis='y', labelsize=9)
         
-        # График 4: Delta % на 1H (для наглядности тренда)
-        ax4.plot(self.data.index, self.data['delta_pct_1h'], 
-                label='Delta % (1H)', linewidth=1, color='blue')
-        ax4.plot(self.data.index, self.data['upper_2sigma_1h'], 
-                label='+1σ (1H)', linewidth=1, color='green', linestyle='--')
-        ax4.plot(self.data.index, self.data['lower_2sigma_1h'], 
-                label='-1σ (1H)', linewidth=1, color='red', linestyle='--')
-        ax4.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
-        ax4.set_title('Delta % и полосы ±1σ (1 час) - Подтверждение тренда', fontsize=13, fontweight='bold', pad=12)
-        ax4.set_ylabel('Delta %', fontsize=10)
-        ax4.legend(loc='best', fontsize=9)
-        ax4.grid(True, alpha=0.3)
-        ax4.tick_params(axis='y', labelsize=9)
-        
-        # График 5: Equity curve
+        # График 4: Equity
         equity_curve_df = pd.DataFrame(self.equity_curve)
-        ax5.plot(equity_curve_df['timestamp'], equity_curve_df['equity'], 
+        ax4.plot(equity_curve_df['timestamp'], equity_curve_df['equity'], 
                 label='Equity', linewidth=2, color='purple')
-        ax5.axhline(y=self.config.INITIAL_CAPITAL, color='gray', 
+        ax4.axhline(y=self.config.INITIAL_CAPITAL, color='gray', 
                    linestyle='--', linewidth=1, label='Starting Capital')
-        ax5.set_title('Кривая капитала', fontsize=13, fontweight='bold', pad=12)
-        ax5.set_xlabel('Дата', fontsize=10)
-        ax5.set_ylabel('Капитал', fontsize=10)
-        ax5.legend(loc='best', fontsize=9)
-        ax5.grid(True, alpha=0.3)
-        ax5.tick_params(axis='both', labelsize=9)
+        ax4.set_title('Кривая капитала', fontsize=13, fontweight='bold')
+        ax4.set_xlabel('Дата', fontsize=10)
+        ax4.set_ylabel('Капитал ($)', fontsize=10)
+        ax4.legend(loc='best')
+        ax4.grid(True, alpha=0.3)
         
-        # График 6: Оставляем пустым (можно использовать для дополнительной информации)
-        ax6.axis('off')  # Скрываем пока
+        # Форматирование оси X
+        ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        ax4.xaxis.set_major_locator(mdates.AutoDateLocator())
         
-        # Форматирование оси X (только на последнем видимом графике)
-        ax5.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-        ax5.xaxis.set_major_locator(mdates.AutoDateLocator())
-        
-        # Сохраняем исходные границы
-        if self.original_xlim is None:
-            self.original_xlim = ax5.get_xlim()
-            self.original_ylim_ax1 = ax1.get_ylim()
-        
-        # === ИНТЕРАКТИВНЫЕ ВИДЖЕТЫ ДЛЯ ВЫБОРА ДИАПАЗОНА ДАТ ===
-        
-        # Создаем область для виджетов внизу
-        widget_area = fig.add_subplot(gs[6])
-        widget_area.axis('off')
-        
-        # Получаем диапазон дат для подсказок
-        min_date = self.data.index.min()
-        max_date = self.data.index.max()
-        date_format = '%Y-%m-%d %H:%M:%S'
-        
-        # Текстовое поле для Start Date
-        ax_start = plt.axes([0.15, 0.04, 0.15, 0.03])
-        text_start = TextBox(ax_start, 'Start Date: ', 
-                            initial=min_date.strftime(date_format),
-                            color='lightgoldenrodyellow', hovercolor='lightyellow')
-        
-        # Текстовое поле для End Date
-        ax_end = plt.axes([0.40, 0.04, 0.15, 0.03])
-        text_end = TextBox(ax_end, 'End Date: ', 
-                          initial=max_date.strftime(date_format),
-                          color='lightgoldenrodyellow', hovercolor='lightyellow')
-        
-        # Кнопка Apply
-        ax_apply = plt.axes([0.58, 0.04, 0.08, 0.03])
-        btn_apply = Button(ax_apply, 'Apply Range', color='lightblue', hovercolor='skyblue')
-        
-        # Кнопка Reset
-        ax_reset = plt.axes([0.68, 0.04, 0.08, 0.03])
-        btn_reset = Button(ax_reset, 'Reset', color='lightcoral', hovercolor='salmon')
-        
-        # Кнопка Fit to Trades
-        ax_fit = plt.axes([0.78, 0.04, 0.10, 0.03])
-        btn_fit = Button(ax_fit, 'Fit to Trades', color='lightgreen', hovercolor='lightseagreen')
-        
-        # Функция применения диапазона
-        def apply_range(event):
-            try:
-                start_str = text_start.text.strip()
-                end_str = text_end.text.strip()
-                
-                # Пробуем разные форматы дат
-                formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d %H:%M:%S', '%Y/%m/%d']
-                
-                start_date = None
-                end_date = None
-                
-                for fmt in formats:
-                    try:
-                        start_date = pd.to_datetime(start_str, format=fmt)
-                        break
-                    except:
-                        continue
-                
-                for fmt in formats:
-                    try:
-                        end_date = pd.to_datetime(end_str, format=fmt)
-                        break
-                    except:
-                        continue
-                
-                if start_date is None or end_date is None:
-                    print(f"❌ Ошибка: неверный формат даты. Используйте: YYYY-MM-DD HH:MM:SS или YYYY-MM-DD")
-                    return
-                
-                if start_date >= end_date:
-                    print(f"❌ Ошибка: начальная дата должна быть меньше конечной")
-                    return
-                
-                # Применяем новый диапазон ко всем графикам
-                for ax in axes:
-                    ax.set_xlim(mdates.date2num(start_date), mdates.date2num(end_date))
-                
-                fig.canvas.draw_idle()
-                print(f"✓ Применен диапазон: {start_date} - {end_date}")
-                
-            except Exception as e:
-                print(f"❌ Ошибка при применении диапазона: {e}")
-        
-        # Функция сброса к исходному диапазону
-        def reset_range(event):
-            for ax in axes:
-                ax.set_xlim(self.original_xlim)
-            
-            text_start.set_val(min_date.strftime(date_format))
-            text_end.set_val(max_date.strftime(date_format))
-            fig.canvas.draw_idle()
-            print("✓ Диапазон сброшен к исходному")
-        
-        # Функция подгонки к сделкам
-        def fit_to_trades(event):
-            trades_df = pd.DataFrame(self.trades)
-            if len(trades_df) > 0:
-                trade_start = trades_df['timestamp'].min()
-                trade_end = trades_df['timestamp'].max()
-                
-                # Добавляем небольшой отступ (5% от диапазона)
-                time_range = trade_end - trade_start
-                margin = time_range * 0.05
-                
-                fit_start = trade_start - margin
-                fit_end = trade_end + margin
-                
-                for ax in axes:
-                    ax.set_xlim(mdates.date2num(fit_start), mdates.date2num(fit_end))
-                
-                text_start.set_val(fit_start.strftime(date_format))
-                text_end.set_val(fit_end.strftime(date_format))
-                fig.canvas.draw_idle()
-                print(f"✓ Подогнано к сделкам: {fit_start} - {fit_end}")
-        
-        # Привязываем функции к кнопкам
-        btn_apply.on_clicked(apply_range)
-        btn_reset.on_clicked(reset_range)
-        btn_fit.on_clicked(fit_to_trades)
-        
-        # Инструкции для пользователя
-        fig.text(0.01, 0.01, 
-                'Формат даты: YYYY-MM-DD HH:MM:SS или YYYY-MM-DD | '
-                'Также доступны: Zoom (лупа), Pan (крестик), Home в панели инструментов',
-                fontsize=8, style='italic', color='gray')
+        plt.tight_layout()
         
         if self.config.SAVE_CHART:
             plt.savefig(self.config.CHART_FILE, dpi=self.config.CHART_DPI, bbox_inches='tight')

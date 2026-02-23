@@ -1,5 +1,5 @@
 """
-Главный файл для запуска бэктестирования торговой стратегии
+Главный файл для запуска бэктестирования стратегии "Парная торговля 2.0"
 """
 
 from src import config
@@ -11,23 +11,25 @@ def main():
     """
     Основная функция для запуска бэктеста
     """
-    print("="*60)
-    print("БЭКТЕСТИРОВАНИЕ СТРАТЕГИИ ПАРНОГО ТРЕЙДИНГА BTC/ETH")
-    print("="*60)
+    print("="*70)
+    print(" " * 10 + "БЭКТЕСТ: ПАРНАЯ ТОРГОВЛЯ 2.0")
+    print(" " * 5 + "smart-lab.ru/mobile/topic/1265846/")
+    print("="*70)
+    print()
     
     # Инициализация движка бэктестирования
     engine = BacktestEngine(config)
     
     # Загрузка данных
-    btc_15m, btc_1h, eth_15m, eth_1h = engine.load_data()
+    btc_1h, eth_1h = engine.load_data()
     
-    # Сохраняем данные для расчета PnL по ногам
-    engine.btc_15m = btc_15m
-    engine.eth_15m = eth_15m
+    # Сохраняем данные для использования в расчетах
+    engine.btc_data = btc_1h
+    engine.eth_data = eth_1h
     
-    # Расчет индикаторов
-    data = engine.calculate_indicators(btc_15m, btc_1h, eth_15m, eth_1h)
-    engine.data = data  # Сохраняем данные в движке для визуализации
+    # Расчет индикаторов (Beta, Spread, Z-score, Volatility filter)
+    data = engine.calculate_indicators(btc_1h, eth_1h)
+    engine.data = data  # Сохраняем для визуализации
     
     # Инициализация стратегии
     strategy = PairTradingStrategy(data, config)
@@ -44,9 +46,9 @@ def main():
     # Визуализация
     engine.plot_results()
     
-    print(f"\n{'='*60}")
-    print("БЭКТЕСТ ЗАВЕРШЕН!")
-    print(f"{'='*60}")
+    print(f"\n{'='*70}")
+    print(" " * 20 + "БЭКТЕСТ ЗАВЕРШЕН!")
+    print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":
