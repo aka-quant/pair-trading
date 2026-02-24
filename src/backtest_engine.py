@@ -415,23 +415,50 @@ class BacktestEngine:
                 # Определяем тип сделки
                 is_long_spread = 'LONG' in signal['type']
                 
+                # Получаем beta коэффициент для расчета размеров позиций
+                beta = entry_data['beta']
+                
+                # Распределение капитала согласно beta (hedge ratio)
+                # Для нейтрального хеджа: weight_btc = 1/(1+beta), weight_eth = beta/(1+beta)
+                # Это обеспечивает dollar-neutral позицию с учетом корреляции активов
+                total_weight = 1.0 + beta
+                btc_weight = 1.0 / total_weight
+                eth_weight = beta / total_weight
+                
+                # Размеры позиций в USD
+                btc_position_usd = entry_data['position_size_usd'] * btc_weight
+                eth_position_usd = entry_data['position_size_usd'] * eth_weight
+                
                 if is_long_spread:
                     # LONG SPREAD = BUY BTC + SELL ETH
+                    # BTC нога: Long позиция
                     btc_pnl_pct = (btc_price_exit - entry_data['btc_price_entry']) / entry_data['btc_price_entry'] * 100
+                    btc_pnl_usd = btc_position_usd * btc_pnl_pct / 100
+                    
+                    # ETH нога: Short позиция
                     eth_pnl_pct = (entry_data['eth_price_entry'] - eth_price_exit) / entry_data['eth_price_entry'] * 100
+                    eth_pnl_usd = eth_position_usd * eth_pnl_pct / 100
                 else:
                     # SHORT SPREAD = SELL BTC + BUY ETH
+                    # BTC нога: Short позиция
                     btc_pnl_pct = (entry_data['btc_price_entry'] - btc_price_exit) / entry_data['btc_price_entry'] * 100
+                    btc_pnl_usd = btc_position_usd * btc_pnl_pct / 100
+                    
+                    # ETH нога: Long позиция
                     eth_pnl_pct = (eth_price_exit - entry_data['eth_price_entry']) / entry_data['eth_price_entry'] * 100
+                    eth_pnl_usd = eth_position_usd * eth_pnl_pct / 100
                 
-                # Общий P&L (среднее от двух ног)
-                total_pnl_pct = btc_pnl_pct + eth_pnl_pct
+                # Общий P&L в USD (сумма обеих ног с учетом весов)
+                total_pnl_usd = btc_pnl_usd + eth_pnl_usd
                 
-                # Комиссия
+                # Общий P&L в процентах от всей позиции
+                total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
+                
+                # Комиссия (применяется к общему объему позиции)
                 commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
                 net_pnl_pct = total_pnl_pct - commission_pct
                 
-                # P&L в долларах
+                # Чистый P&L в долларах
                 pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
                 
                 # Обновляем капитал
@@ -447,9 +474,15 @@ class BacktestEngine:
                     'btc_price': entry_data['btc_price_entry'],
                     'eth_price': entry_data['eth_price_entry'],
                     'position_size_usd': entry_data['position_size_usd'],
+                    'btc_weight': btc_weight,
+                    'eth_weight': eth_weight,
+                    'btc_position_usd': btc_position_usd,
+                    'eth_position_usd': eth_position_usd,
                     'equity_before': entry_data['equity_before'],
                     'btc_pnl_%': None,
                     'eth_pnl_%': None,
+                    'btc_pnl_usd': None,
+                    'eth_pnl_usd': None,
                     'total_pnl_%': None,
                     'commission_%': None,
                     'net_pnl_%': None,
@@ -468,9 +501,15 @@ class BacktestEngine:
                     'btc_price': btc_price_exit,
                     'eth_price': eth_price_exit,
                     'position_size_usd': entry_data['position_size_usd'],
+                    'btc_weight': btc_weight,
+                    'eth_weight': eth_weight,
+                    'btc_position_usd': btc_position_usd,
+                    'eth_position_usd': eth_position_usd,
                     'equity_before': entry_data['equity_before'],
                     'btc_pnl_%': btc_pnl_pct,
                     'eth_pnl_%': eth_pnl_pct,
+                    'btc_pnl_usd': btc_pnl_usd,
+                    'eth_pnl_usd': eth_pnl_usd,
                     'total_pnl_%': total_pnl_pct,
                     'commission_%': commission_pct,
                     'net_pnl_%': net_pnl_pct,
@@ -526,16 +565,22 @@ class BacktestEngine:
         print(f"{'='*60}")
         
         print(f"\nBTC нога:")
+        print(f"  Средний вес в позиции: {exit_trades['btc_weight'].mean():.4f} ({exit_trades['btc_weight'].mean()*100:.2f}%)")
         print(f"  Средний P&L: {exit_trades['btc_pnl_%'].mean():.4f}%")
+        print(f"  Средний P&L в USD: ${exit_trades['btc_pnl_usd'].mean():.2f}")
         print(f"  Макс профит: {exit_trades['btc_pnl_%'].max():.4f}%")
         print(f"  Макс убыток: {exit_trades['btc_pnl_%'].min():.4f}%")
         
         print(f"\nETH нога:")
+        print(f"  Средний вес в позиции: {exit_trades['eth_weight'].mean():.4f} ({exit_trades['eth_weight'].mean()*100:.2f}%)")
         print(f"  Средний P&L: {exit_trades['eth_pnl_%'].mean():.4f}%")
+        print(f"  Средний P&L в USD: ${exit_trades['eth_pnl_usd'].mean():.2f}")
         print(f"  Макс профит: {exit_trades['eth_pnl_%'].max():.4f}%")
         print(f"  Макс убыток: {exit_trades['eth_pnl_%'].min():.4f}%")
         
         print(f"\nОбщая статистика:")
+        print(f"  Средняя Beta: {exit_trades['beta'].mean():.4f}")
+        print(f"  Beta (мин/макс): {exit_trades['beta'].min():.4f} / {exit_trades['beta'].max():.4f}")
         print(f"  Средний общий P&L: {exit_trades['total_pnl_%'].mean():.4f}%")
         print(f"  Средний чистый P&L: {exit_trades['net_pnl_%'].mean():.4f}%")
         print(f"  Макс профит: {exit_trades['net_pnl_%'].max():.4f}%")
@@ -571,7 +616,7 @@ class BacktestEngine:
         print(f"\n{'='*60}")
         print("ПЕРВЫЕ 5 СДЕЛОК:")
         print(f"{'='*60}")
-        display_cols = ['timestamp', 'type', 'z_score', 'btc_pnl_%', 'eth_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
+        display_cols = ['timestamp', 'type', 'beta', 'z_score', 'btc_pnl_%', 'eth_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
         print(exit_trades[display_cols].head(5).to_string(index=False))
     
     def save_results(self):
