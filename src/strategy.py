@@ -119,8 +119,14 @@ class PairTradingStrategy:
     def check_long_spread_exit(self, i):
         """
         Проверка условия выхода из LONG СПРЕДА:
-        - Z-score возвращается к нулю или пересекает его (mean reversion завершен)
-        - Альтернативно: Z-score пересекает противоположный порог (reversal)
+        
+        Режим 1 (EXIT_MODE = 1): Выход при возврате к нулю
+        - Z-score пересекает 0 снизу вверх
+        - Консервативный подход, есть периоды без позиций
+        
+        Режим 2 (EXIT_MODE = 2): Выход при пересечении противоположного порога
+        - Z-score пересекает +Z_SCORE_ENTRY (например, +1.5)
+        - Агрессивный подход, всегда в рынке (переворот в SHORT)
         """
         if i == 0:
             return False
@@ -128,20 +134,30 @@ class PairTradingStrategy:
         current = self.data.iloc[i]
         previous = self.data.iloc[i-1]
         
-        # Выход 1: Z-score вернулся к нулю (пересек снизу вверх)
-        mean_reversion = (previous['z_score'] < self.config.Z_SCORE_EXIT and 
-                         current['z_score'] >= self.config.Z_SCORE_EXIT)
+        if self.config.EXIT_MODE == 1:
+            # Режим 1: Выход при возврате к нулю
+            return (previous['z_score'] < self.config.Z_SCORE_EXIT and 
+                    current['z_score'] >= self.config.Z_SCORE_EXIT)
         
-        # Выход 2: Z-score пересек противоположный порог (слишком далеко ушел в другую сторону)
-        opposite_threshold = current['z_score'] > self.config.Z_SCORE_ENTRY
+        elif self.config.EXIT_MODE == 2:
+            # Режим 2: Выход при пересечении противоположного порога
+            # LONG → SHORT (переворот позиции)
+            return (previous['z_score'] <= self.config.Z_SCORE_ENTRY and 
+                    current['z_score'] > self.config.Z_SCORE_ENTRY)
         
-        return mean_reversion or opposite_threshold
+        return False
     
     def check_short_spread_exit(self, i):
         """
         Проверка условия выхода из SHORT СПРЕДА:
-        - Z-score возвращается к нулю или пересекает его (mean reversion завершен)
-        - Альтернативно: Z-score пересекает противоположный порог (reversal)
+        
+        Режим 1 (EXIT_MODE = 1): Выход при возврате к нулю
+        - Z-score пересекает 0 сверху вниз
+        - Консервативный подход, есть периоды без позиций
+        
+        Режим 2 (EXIT_MODE = 2): Выход при пересечении противоположного порога
+        - Z-score пересекает -Z_SCORE_ENTRY (например, -1.5)
+        - Агрессивный подход, всегда в рынке (переворот в LONG)
         """
         if i == 0:
             return False
@@ -149,14 +165,18 @@ class PairTradingStrategy:
         current = self.data.iloc[i]
         previous = self.data.iloc[i-1]
         
-        # Выход 1: Z-score вернулся к нулю (пересек сверху вниз)
-        mean_reversion = (previous['z_score'] > self.config.Z_SCORE_EXIT and 
-                         current['z_score'] <= self.config.Z_SCORE_EXIT)
+        if self.config.EXIT_MODE == 1:
+            # Режим 1: Выход при возврате к нулю
+            return (previous['z_score'] > self.config.Z_SCORE_EXIT and 
+                    current['z_score'] <= self.config.Z_SCORE_EXIT)
         
-        # Выход 2: Z-score пересек противоположный порог
-        opposite_threshold = current['z_score'] < -self.config.Z_SCORE_ENTRY
+        elif self.config.EXIT_MODE == 2:
+            # Режим 2: Выход при пересечении противоположного порога
+            # SHORT → LONG (переворот позиции)
+            return (previous['z_score'] >= -self.config.Z_SCORE_ENTRY and 
+                    current['z_score'] < -self.config.Z_SCORE_ENTRY)
         
-        return mean_reversion or opposite_threshold
+        return False
     
     def generate_signals(self):
         """

@@ -17,6 +17,20 @@ def main():
     print("="*70)
     print()
     
+    # Вывод параметров стратегии
+    print("ПАРАМЕТРЫ СТРАТЕГИИ:")
+    print(f"  Z-score вход: ±{config.Z_SCORE_ENTRY}")
+    print(f"  Z-score выход: {config.Z_SCORE_EXIT}")
+    
+    exit_mode_desc = {
+        1: "Режим 1 - Выход при возврате к 0 (консервативный)",
+        2: "Режим 2 - Выход при противоположном пороге (агрессивный, always in market)"
+    }
+    print(f"  Режим выхода: {exit_mode_desc.get(config.EXIT_MODE, 'Неизвестный')}")
+    print(f"  Фильтр волатильности: {'ВКЛ' if config.USE_VOLATILITY_FILTER else 'ВЫКЛ'}")
+    print(f"  Фильтр коинтеграции: {'ВКЛ' if config.COINTEGRATION_CHECK_ENABLED else 'ВЫКЛ'}")
+    print()
+    
     # Инициализация движка бэктестирования
     engine = BacktestEngine(config)
     
