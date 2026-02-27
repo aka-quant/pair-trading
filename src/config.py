@@ -4,18 +4,21 @@
 """
 
 # === Параметры данных ===
-BTC_1H_FILE = 'data/BTC-USDT-SWAP_2021-01-01_2025-12-31_1H.csv'
-ETH_1H_FILE = 'data/ETH-USDT-SWAP_2021-01-01_2025-12-31_1H.csv'
+FIRST_LEG = 'data/BTC-USDT_2022-05-27_2025-12-31_1H.csv'
+SECOND_LEG = 'data/BTC-USDT-SWAP_2022-05-27_2025-12-31_1H.csv'
 
 # === Параметры стратегии "Парная торговля 2.0" ===
 
 # --- Параметры Beta (hedge ratio) ---
-BETA_LOOKBACK = 60  # Окно для расчета beta через OLS регрессию (60 баров)
+# Увеличено окно для beta до 250 баров для устойчивости
+BETA_LOOKBACK = 250  # Окно для расчета beta через OLS регрессию (250 баров)
 USE_ROLLING_BETA = True  # Использовать ли скользящую beta (адаптация к изменению корреляции)
 
 # --- Параметры спреда и Z-score ---
-SPREAD_LOOKBACK = 30  # Окно для расчета среднего и std спреда (30 баров)
-Z_SCORE_ENTRY = 1.5  # Порог Z-score для входа (±1.5σ вместо классических ±2.0σ)
+# Увеличено окно для спреда до 200 баров
+SPREAD_LOOKBACK = 200  # Окно для расчета среднего и std спреда (200 баров)
+# Делаем фильтр по Z-score более строгим
+Z_SCORE_ENTRY = 2.5  # Порог Z-score для входа (±2.5σ)
 Z_SCORE_EXIT = 0.0   # Порог Z-score для выхода (0 = возврат к среднему)
 
 # --- Режим выхода из позиций ---
@@ -24,24 +27,27 @@ EXIT_MODE = 1  # 1 = Выход при возврате к 0 (консерват
 
 # --- Фильтр волатильности ---
 USE_VOLATILITY_FILTER = True  # Включить фильтр волатильности
-VOLATILITY_THRESHOLD = 0.8  # Входим только если σ_current >= 0.8 × σ_long
-VOLATILITY_LONG_LOOKBACK = 60  # Окно для расчета долгосрочной волатильности
+# Делаем фильтр более строгим и окно длиннее
+VOLATILITY_THRESHOLD = 1.0  # Входим только если σ_current >= 1.0 × σ_long
+VOLATILITY_LONG_LOOKBACK = 250  # Окно для расчета долгосрочной волатильности (250 баров)
 
 # === Параметры коинтеграции и стационарности ===
 # "Cointegration beats correlation" - из статьи Amberdata
 
 # ADF тест (Augmented Dickey-Fuller) - проверка стационарности спреда
 USE_ADF_TEST = True  # Использовать ADF тест для проверки коинтеграции
-ADF_PVALUE_THRESHOLD = 0.05  # Порог p-value для ADF теста (< 0.05 = стационарен)
-ADF_LOOKBACK = 60  # Окно данных для ADF теста
+# Увеличено окно для ADF до 250 баров, делаем фильтр строже
+ADF_PVALUE_THRESHOLD = 0.005  # Порог p-value для ADF теста (< 0.005 = стационарен)
+ADF_LOOKBACK = 250  # Окно данных для ADF теста (250 баров)
 
 # Hurst exponent - проверка mean reversion свойств
 USE_HURST_FILTER = True  # Использовать Hurst exponent для проверки mean reversion
-HURST_MAX_THRESHOLD = 0.5  # Максимальный Hurst (< 0.5 = mean reverting, идеально < 0.4)
-HURST_LOOKBACK = 60  # Окно данных для расчета Hurst
+# Увеличено окно для Hurst до 250 баров, делаем фильтр строже
+HURST_MAX_THRESHOLD = 0.42  # Максимальный Hurst (< 0.42 = mean reverting)
+HURST_LOOKBACK = 250  # Окно данных для расчета Hurst (250 баров)
 
 # Динамическая проверка коинтеграции
-COINTEGRATION_CHECK_ENABLED = False  # ВРЕМЕННО ОТКЛЮЧЕНО для тестирования базовой логики
+COINTEGRATION_CHECK_ENABLED = True  # Включено для фильтрации по коинтеграции
 
 # === Параметры бэктеста ===
 INITIAL_CAPITAL = 10000  # Начальный капитал в долларах

@@ -37,7 +37,7 @@ class PairTradingStrategy:
         
         Args:
             data: DataFrame с колонками:
-                - btc_close, eth_close (цены закрытия)
+                - first_leg_close, second_leg_close (цены закрытия)
                 - spread (логарифмический спред)
                 - z_score (Z-score спреда)
                 - sigma_current, sigma_long (волатильности для фильтра)
@@ -199,8 +199,8 @@ class PairTradingStrategy:
                         'type': 'LONG_SPREAD_ENTRY',
                         'z_score': current['z_score'],
                         'spread': current['spread'],
-                        'btc_close': current['btc_close'],
-                        'eth_close': current['eth_close'],
+                        'first_leg_close': current['first_leg_close'],
+                        'second_leg_close': current['second_leg_close'],
                         'beta': current.get('beta', None)
                     })
                     self.position = 1
@@ -213,8 +213,8 @@ class PairTradingStrategy:
                         'type': 'SHORT_SPREAD_ENTRY',
                         'z_score': current['z_score'],
                         'spread': current['spread'],
-                        'btc_close': current['btc_close'],
-                        'eth_close': current['eth_close'],
+                        'first_leg_close': current['first_leg_close'],
+                        'second_leg_close': current['second_leg_close'],
                         'beta': current.get('beta', None)
                     })
                     self.position = -1
@@ -229,8 +229,8 @@ class PairTradingStrategy:
                         'type': 'LONG_SPREAD_EXIT',
                         'z_score': current['z_score'],
                         'spread': current['spread'],
-                        'btc_close': current['btc_close'],
-                        'eth_close': current['eth_close'],
+                        'first_leg_close': current['first_leg_close'],
+                        'second_leg_close': current['second_leg_close'],
                         'entry_z_score': self.entry_z_score,
                         'beta': current.get('beta', None)
                     })
@@ -246,8 +246,8 @@ class PairTradingStrategy:
                         'type': 'SHORT_SPREAD_EXIT',
                         'z_score': current['z_score'],
                         'spread': current['spread'],
-                        'btc_close': current['btc_close'],
-                        'eth_close': current['eth_close'],
+                        'first_leg_close': current['first_leg_close'],
+                        'second_leg_close': current['second_leg_close'],
                         'entry_z_score': self.entry_z_score,
                         'beta': current.get('beta', None)
                     })

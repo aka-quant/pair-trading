@@ -1,5 +1,5 @@
 """
-Скрипт для парсинга рыночных данных с OKX (спот), используя python-okx и метод get_history_candlesticks.
+Скрипт для парсинга рыночных данных с OKX, используя python-okx и метод get_history_candlesticks.
 """
 
 import okx.MarketData as MarketData

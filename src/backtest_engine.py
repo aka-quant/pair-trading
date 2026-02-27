@@ -14,6 +14,73 @@ from statsmodels.tsa.stattools import adfuller  # ADF тест для коинт
 
 
 class BacktestEngine:
+
+    def calculate_adf_test(self, spread, lookback):
+        """
+        Расчет p-value ADF теста по скользящему окну
+        Args:
+            spread: Series спреда
+            lookback: окно для расчета
+        Returns:
+            Series с p-value ADF теста
+        """
+        adf_pvalues = pd.Series(index=spread.index, dtype=float)
+        for i in range(lookback, len(spread)):
+            window = spread.iloc[i-lookback:i].values
+            try:
+                adf_result = adfuller(window, autolag='AIC')
+                adf_pvalues.iloc[i] = adf_result[1]
+            except:
+                adf_pvalues.iloc[i] = 1.0
+        return adf_pvalues
+    def plot_stats_dashboard(self):
+        """Визуализация статистических метрик и дельты между ногами (строится всегда)"""
+        import matplotlib.pyplot as plt
+        import numpy as np
+        print("\nСоздание дашборда статистических метрик...")
+        fig2, axes = plt.subplots(5, 1, figsize=(18, 18), sharex=True, gridspec_kw={'hspace': 0.25})
+        # 1. График Hurst
+        if 'hurst' in self.data.columns:
+            axes[0].plot(self.data.index, self.data['hurst'], label='Hurst exponent', color='purple')
+            axes[0].axhline(0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+            axes[0].set_ylabel('Hurst')
+            axes[0].set_title('Hurst exponent (mean reversion)')
+            axes[0].legend()
+            axes[0].grid(True, alpha=0.3)
+        # 2. График ADF p-value
+        if 'adf_pvalue' in self.data.columns:
+            axes[1].plot(self.data.index, self.data['adf_pvalue'], label='ADF p-value', color='brown')
+            axes[1].axhline(0.05, color='red', linestyle='--', linewidth=1, alpha=0.5, label='0.05 threshold')
+            axes[1].set_ylabel('ADF p-value')
+            axes[1].set_title('ADF test p-value (cointegration)')
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3)
+        # 3. Волатильность (sigma_current и sigma_long)
+        if 'sigma_current' in self.data.columns and 'sigma_long' in self.data.columns:
+            axes[2].plot(self.data.index, self.data['sigma_current'], label='Short-term volatility', color='orange')
+            axes[2].plot(self.data.index, self.data['sigma_long'], label='Long-term volatility', color='blue', alpha=0.7)
+            axes[2].set_ylabel('Volatility')
+            axes[2].set_title('Volatility (short-term & long-term)')
+            axes[2].legend()
+            axes[2].grid(True, alpha=0.3)
+        # 4. Дельта между первой и второй ногой
+        if 'first_leg_close' in self.data.columns and 'second_leg_close' in self.data.columns:
+            delta = self.data['first_leg_close'] - self.data['second_leg_close']
+            axes[3].plot(self.data.index, delta, label='Delta (First leg - Second leg)', color='green')
+            axes[3].set_ylabel('Delta')
+            axes[3].set_title('Delta between First and Second Leg')
+            axes[3].legend()
+            axes[3].grid(True, alpha=0.3)
+        # 5. Spread (для полноты)
+        if 'spread' in self.data.columns:
+            axes[4].plot(self.data.index, self.data['spread'], label='Spread', color='black')
+            axes[4].set_ylabel('Spread')
+            axes[4].set_title('Logarithmic Spread')
+            axes[4].legend()
+            axes[4].grid(True, alpha=0.3)
+        axes[-1].set_xlabel('Time')
+        plt.suptitle('Статистические метрики и дельта между ногами', fontsize=16, fontweight='bold')
+        plt.show()
     """
     Движок для бэктестирования стратегии парного трейдинга с Z-score
     """
@@ -27,170 +94,93 @@ class BacktestEngine:
         """
         self.config = config
         self.data = None
-        self.btc_data = None
-        self.eth_data = None
+        self.first_leg_data = None
+        self.second_leg_data = None
         self.trades = []
         self.equity_curve = []
         
     def load_data(self):
         """Загрузка и подготовка данных"""
         print("Загрузка данных...")
-        
-        # Загрузка данных
-        btc_data = pd.read_csv(self.config.BTC_1H_FILE)
-        eth_data = pd.read_csv(self.config.ETH_1H_FILE)
-        
-        # Конвертируем timestamp в datetime
-        btc_data['timestamp'] = pd.to_datetime(btc_data['timestamp'])
-        eth_data['timestamp'] = pd.to_datetime(eth_data['timestamp'])
-        
-        btc_data.set_index('timestamp', inplace=True)
-        eth_data.set_index('timestamp', inplace=True)
-        
-        print(f"BTC 1H: {len(btc_data)} свечей")
-        print(f"ETH 1H: {len(eth_data)} свечей")
-        print(f"Период: с {btc_data.index[0]} по {btc_data.index[-1]}")
-        
-        # Сохраняем для расчета PnL
-        self.btc_data = btc_data
-        self.eth_data = eth_data
-        
-        return btc_data, eth_data
+        first_leg_data = pd.read_csv(self.config.FIRST_LEG)
+        second_leg_data = pd.read_csv(self.config.SECOND_LEG)
+        first_leg_data['timestamp'] = pd.to_datetime(first_leg_data['timestamp'])
+        second_leg_data['timestamp'] = pd.to_datetime(second_leg_data['timestamp'])
+        first_leg_data.set_index('timestamp', inplace=True)
+        second_leg_data.set_index('timestamp', inplace=True)
+        print(f"FIRST_LEG: {len(first_leg_data)} свечей")
+        print(f"SECOND_LEG: {len(second_leg_data)} свечей")
+        print(f"Период: с {first_leg_data.index[0]} по {first_leg_data.index[-1]}")
+        self.first_leg_data = first_leg_data
+        self.second_leg_data = second_leg_data
+        return first_leg_data, second_leg_data
     
     def calculate_beta(self, log_btc, log_eth, lookback):
         """
         Расчет Beta через OLS регрессию: β = Cov(log(PA), log(PB)) / Var(log(PB))
-        
         Args:
             log_btc: логарифмы цен BTC
             log_eth: логарифмы цен ETH
             lookback: окно для расчета
-            
         Returns:
             Series с beta коэффициентами
         """
         beta_series = pd.Series(index=log_btc.index, dtype=float)
-        
         for i in range(lookback, len(log_btc)):
-            # Берем окно данных
             y = log_btc.iloc[i-lookback:i].values
             x = log_eth.iloc[i-lookback:i].values
-            
-            # OLS регрессия
             X = add_constant(x)
             model = OLS(y, X)
             results = model.fit()
-            
-            # Beta - это коэффициент при x (индекс 1)
             beta_series.iloc[i] = results.params[1]
-        
         return beta_series
-    
-    def calculate_adf_test(self, spread, lookback):
-        """
-        ADF тест (Augmented Dickey-Fuller) - проверка стационарности спреда
-        
-        Проверяет коинтеграцию пары: если спред стационарен, то пара коинтегрирована.
-        "Cointegration beats correlation" - из статьи Amberdata
-        
-        Args:
-            spread: временной ряд спреда
-            lookback: окно данных для теста
-            
-        Returns:
-            Series с p-value ADF теста (< 0.05 = стационарен = коинтегрирован)
-        """
-        adf_pvalue = pd.Series(index=spread.index, dtype=float)
-        
-        for i in range(lookback, len(spread)):
-            # Берем окно данных
-            window_data = spread.iloc[i-lookback:i].values
-            
-            try:
-                # ADF тест: H0 = есть единичный корень (нестационарен)
-                # Если p-value < 0.05, отвергаем H0 → ряд стационарен
-                adf_result = adfuller(window_data, maxlag=1, regression='c', autolag=None)
-                adf_pvalue.iloc[i] = adf_result[1]  # p-value
-            except:
-                adf_pvalue.iloc[i] = 1.0  # В случае ошибки считаем нестационарным
-        
-        return adf_pvalue
-    
+
     def calculate_hurst_exponent(self, spread, lookback):
         """
-        Hurst exponent - проверка mean reversion свойств спреда
-        
-        Интерпретация:
-        - H < 0.5: mean reverting (идеально для парной торговли, лучше < 0.4)
-        - H = 0.5: случайное блуждание (не подходит)
-        - H > 0.5: трендовый (не подходит для mean reversion)
-        
+        Расчет Hurst exponent методом R/S (Rescaled Range)
         Args:
-            spread: временной ряд спреда
-            lookback: окно данных для расчета
-            
+            spread: Series спреда
+            lookback: окно для расчета
         Returns:
-            Series с Hurst exponent
+            Series с hurst коэффициентами
         """
         hurst_series = pd.Series(index=spread.index, dtype=float)
-        
         for i in range(lookback, len(spread)):
-            # Берем окно данных
             ts = spread.iloc[i-lookback:i].values
-            
             try:
-                # Метод R/S (Rescaled Range)
                 lags = range(2, min(20, len(ts) // 2))
                 tau = []
-                
                 for lag in lags:
-                    # Делим на подпериоды
                     n_subseries = len(ts) // lag
                     rs_values = []
-                    
                     for j in range(n_subseries):
                         subseries = ts[j*lag:(j+1)*lag]
-                        
-                        # Mean
                         mean = np.mean(subseries)
-                        
-                        # Cumulative deviations
                         deviations = subseries - mean
                         cumdev = np.cumsum(deviations)
-                        
-                        # Range
                         R = np.max(cumdev) - np.min(cumdev)
-                        
-                        # Standard deviation
                         S = np.std(subseries, ddof=1)
-                        
                         if S > 0:
                             rs_values.append(R / S)
-                    
                     if len(rs_values) > 0:
                         tau.append(np.mean(rs_values))
-                
-                # Linear regression log(tau) vs log(lags)
                 if len(tau) > 2:
                     log_lags = np.log(list(lags))
                     log_tau = np.log(tau)
-                    
-                    # Убираем inf и nan
                     valid_idx = np.isfinite(log_lags) & np.isfinite(log_tau)
                     if np.sum(valid_idx) > 2:
                         poly = np.polyfit(log_lags[valid_idx], log_tau[valid_idx], 1)
-                        hurst = poly[0]  # Наклон = Hurst exponent
+                        hurst = poly[0]
                         hurst_series.iloc[i] = hurst
                     else:
                         hurst_series.iloc[i] = 0.5
                 else:
                     hurst_series.iloc[i] = 0.5
             except:
-                hurst_series.iloc[i] = 0.5  # В случае ошибки - нейтральное значение
-        
+                hurst_series.iloc[i] = 0.5
         return hurst_series
     
-    def calculate_indicators(self, btc_data, eth_data):
+    def calculate_indicators(self, first_leg_data, second_leg_data):
         """
         Расчет всех индикаторов для стратегии:
         1. Beta (β) через OLS регрессию
@@ -204,35 +194,25 @@ class BacktestEngine:
         print("\nРасчет индикаторов стратегии...")
         
         # Создаем DataFrame для индикаторов
-        df = pd.DataFrame(index=btc_data.index)
-        
-        # Цены закрытия
-        df['btc_close'] = btc_data['close']
-        df['eth_close'] = eth_data['close']
-        
-        # === ШАГ 1: Расчет Beta через OLS ===
+        df = pd.DataFrame(index=first_leg_data.index)
+        df['first_leg_close'] = first_leg_data['close']
+        df['second_leg_close'] = second_leg_data['close']
         print("  - Расчет Beta (hedge ratio) через OLS регрессию...")
-        log_btc = np.log(btc_data['close'])
-        log_eth = np.log(eth_data['close'])
-        
+        log_first = np.log(first_leg_data['close'])
+        log_second = np.log(second_leg_data['close'])
         if self.config.USE_ROLLING_BETA:
-            # Rolling beta - адаптируется к изменению корреляции
-            df['beta'] = self.calculate_beta(log_btc, log_eth, self.config.BETA_LOOKBACK)
+            df['beta'] = self.calculate_beta(log_first, log_second, self.config.BETA_LOOKBACK)
         else:
-            # Фиксированная beta на всем периоде
-            X = add_constant(log_eth.values)
-            model = OLS(log_btc.values, X)
+            X = add_constant(log_second.values)
+            model = OLS(log_first.values, X)
             results = model.fit()
             fixed_beta = results.params[1]
             df['beta'] = fixed_beta
             print(f"    Фиксированная Beta = {fixed_beta:.4f}")
-        
-        # === ШАГ 2: Расчет спреда ===
         print("  - Расчет логарифмического спреда...")
-        # Спред = log(PA) - β × log(PB)
-        df['log_btc'] = log_btc
-        df['log_eth'] = log_eth
-        df['spread'] = log_btc - df['beta'] * log_eth
+        df['log_first'] = log_first
+        df['log_second'] = log_second
+        df['spread'] = log_first - df['beta'] * log_second
         
         # === ШАГ 3: Расчет статистик спреда (μ, σ) на скользящем окне ===
         print("  - Расчет среднего и стандартного отклонения спреда...")
@@ -271,10 +251,10 @@ class BacktestEngine:
         
         # Корреляция для информации
         print("  - Расчет корреляции...")
-        df['correlation'] = log_btc.rolling(
+        df['correlation'] = log_first.rolling(
             window=self.config.BETA_LOOKBACK, 
             min_periods=self.config.BETA_LOOKBACK
-        ).corr(log_eth)
+        ).corr(log_second)
         
         # === ШАГ 6: ADF тест - проверка коинтеграции ===
         # "Cointegration beats correlation" - Amberdata
@@ -384,8 +364,8 @@ class BacktestEngine:
                 timestamp = signal['timestamp']
                 
                 # Получаем цены на момент входа
-                btc_price_entry = self.btc_data.loc[timestamp, 'close']
-                eth_price_entry = self.eth_data.loc[timestamp, 'close']
+                first_leg_price_entry = self.first_leg_data.loc[timestamp, 'close']
+                second_leg_price_entry = self.second_leg_data.loc[timestamp, 'close']
                 
                 # Размер позиции = весь капитал
                 position_size_usd = equity
@@ -397,8 +377,8 @@ class BacktestEngine:
                     'spread_entry': signal['spread'],
                     'z_score_entry': signal['z_score'],
                     'beta': signal['beta'],
-                    'btc_price_entry': btc_price_entry,
-                    'eth_price_entry': eth_price_entry,
+                    'first_leg_price_entry': first_leg_price_entry,
+                    'second_leg_price_entry': second_leg_price_entry,
                     'position_size_usd': position_size_usd,
                     'equity_before': equity
                 }
@@ -409,8 +389,8 @@ class BacktestEngine:
                 timestamp = signal['timestamp']
                 
                 # Получаем цены на момент выхода
-                btc_price_exit = self.btc_data.loc[timestamp, 'close']
-                eth_price_exit = self.eth_data.loc[timestamp, 'close']
+                first_leg_price_exit = self.first_leg_data.loc[timestamp, 'close']
+                second_leg_price_exit = self.second_leg_data.loc[timestamp, 'close']
                 
                 # Определяем тип сделки
                 is_long_spread = 'LONG' in signal['type']
@@ -426,90 +406,67 @@ class BacktestEngine:
                 eth_weight = beta / total_weight
                 
                 # Размеры позиций в USD
-                btc_position_usd = entry_data['position_size_usd'] * btc_weight
-                eth_position_usd = entry_data['position_size_usd'] * eth_weight
-                
+                first_leg_position_usd = entry_data['position_size_usd'] * btc_weight
+                second_leg_position_usd = entry_data['position_size_usd'] * eth_weight
                 if is_long_spread:
-                    # LONG SPREAD = BUY BTC + SELL ETH
-                    # BTC нога: Long позиция
-                    btc_pnl_pct = (btc_price_exit - entry_data['btc_price_entry']) / entry_data['btc_price_entry'] * 100
-                    btc_pnl_usd = btc_position_usd * btc_pnl_pct / 100
-                    
-                    # ETH нога: Short позиция
-                    eth_pnl_pct = (entry_data['eth_price_entry'] - eth_price_exit) / entry_data['eth_price_entry'] * 100
-                    eth_pnl_usd = eth_position_usd * eth_pnl_pct / 100
+                    first_leg_pnl_pct = (first_leg_price_exit - entry_data['first_leg_price_entry']) / entry_data['first_leg_price_entry'] * 100
+                    first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
+                    second_leg_pnl_pct = (entry_data['second_leg_price_entry'] - second_leg_price_exit) / entry_data['second_leg_price_entry'] * 100
+                    second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
                 else:
-                    # SHORT SPREAD = SELL BTC + BUY ETH
-                    # BTC нога: Short позиция
-                    btc_pnl_pct = (entry_data['btc_price_entry'] - btc_price_exit) / entry_data['btc_price_entry'] * 100
-                    btc_pnl_usd = btc_position_usd * btc_pnl_pct / 100
-                    
-                    # ETH нога: Long позиция
-                    eth_pnl_pct = (eth_price_exit - entry_data['eth_price_entry']) / entry_data['eth_price_entry'] * 100
-                    eth_pnl_usd = eth_position_usd * eth_pnl_pct / 100
-                
-                # Общий P&L в USD (сумма обеих ног с учетом весов)
-                total_pnl_usd = btc_pnl_usd + eth_pnl_usd
-                
-                # Общий P&L в процентах от всей позиции
-                total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
-                
-                # Комиссия (применяется к общему объему позиции)
-                commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
-                net_pnl_pct = total_pnl_pct - commission_pct
-                
-                # Чистый P&L в долларах
-                pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
-                
-                # Обновляем капитал
-                equity = entry_data['equity_before'] + pnl_usd
-                
-                # Записываем вход
-                entry_record = {
-                    'timestamp': entry_data['timestamp_entry'],
-                    'type': entry_data['type_entry'],
-                    'spread': entry_data['spread_entry'],
-                    'z_score': entry_data['z_score_entry'],
-                    'beta': entry_data['beta'],
-                    'btc_price': entry_data['btc_price_entry'],
-                    'eth_price': entry_data['eth_price_entry'],
-                    'position_size_usd': entry_data['position_size_usd'],
-                    'btc_weight': btc_weight,
-                    'eth_weight': eth_weight,
-                    'btc_position_usd': btc_position_usd,
-                    'eth_position_usd': eth_position_usd,
-                    'equity_before': entry_data['equity_before'],
-                    'btc_pnl_%': None,
-                    'eth_pnl_%': None,
-                    'btc_pnl_usd': None,
-                    'eth_pnl_usd': None,
-                    'total_pnl_%': None,
-                    'commission_%': None,
-                    'net_pnl_%': None,
-                    'pnl_usd': None,
-                    'equity_after': None
-                }
+                    first_leg_pnl_pct = (entry_data['first_leg_price_entry'] - first_leg_price_exit) / entry_data['first_leg_price_entry'] * 100
+                    first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
+                    second_leg_pnl_pct = (second_leg_price_exit - entry_data['second_leg_price_entry']) / entry_data['second_leg_price_entry'] * 100
+                    second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
+                    total_pnl_usd = first_leg_pnl_usd + second_leg_pnl_usd
+                    total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
+                    commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
+                    net_pnl_pct = total_pnl_pct - commission_pct
+                    pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
+                    equity = entry_data['equity_before'] + pnl_usd
+                    entry_record = {
+                        'timestamp': entry_data['timestamp_entry'],
+                        'type': entry_data['type_entry'],
+                        'spread': entry_data['spread_entry'],
+                        'z_score': entry_data['z_score_entry'],
+                        'beta': entry_data['beta'],
+                        'first_leg_price': entry_data['first_leg_price_entry'],
+                        'second_leg_price': entry_data['second_leg_price_entry'],
+                        'position_size_usd': entry_data['position_size_usd'],
+                        'first_leg_weight': btc_weight,
+                        'second_leg_weight': eth_weight,
+                        'first_leg_position_usd': first_leg_position_usd,
+                        'second_leg_position_usd': second_leg_position_usd,
+                        'equity_before': entry_data['equity_before'],
+                        'first_leg_pnl_%': None,
+                        'second_leg_pnl_%': None,
+                        'first_leg_pnl_usd': None,
+                        'second_leg_pnl_usd': None,
+                        'total_pnl_%': None,
+                        'commission_%': None,
+                        'net_pnl_%': None,
+                        'pnl_usd': None,
+                        'equity_after': None
+                    }
                 self.trades.append(entry_record)
-                
-                # Записываем выход с результатами
                 exit_record = {
                     'timestamp': timestamp,
                     'type': signal['type'],
                     'spread': signal['spread'],
                     'z_score': signal['z_score'],
                     'beta': signal['beta'],
-                    'btc_price': btc_price_exit,
-                    'eth_price': eth_price_exit,
+                    'first_leg_price': first_leg_price_exit,
+                    'second_leg_price': second_leg_price_exit,
                     'position_size_usd': entry_data['position_size_usd'],
-                    'btc_weight': btc_weight,
-                    'eth_weight': eth_weight,
-                    'btc_position_usd': btc_position_usd,
-                    'eth_position_usd': eth_position_usd,
+                    'first_leg_weight': btc_weight,
+                    'second_leg_weight': eth_weight,
+                    'first_leg_position_usd': first_leg_position_usd,
+                    'second_leg_position_usd': second_leg_position_usd,
                     'equity_before': entry_data['equity_before'],
-                    'btc_pnl_%': btc_pnl_pct,
-                    'eth_pnl_%': eth_pnl_pct,
-                    'btc_pnl_usd': btc_pnl_usd,
-                    'eth_pnl_usd': eth_pnl_usd,
+                    'first_leg_pnl_%': first_leg_pnl_pct,
+                    'second_leg_pnl_%': second_leg_pnl_pct,
+                    'first_leg_pnl_usd': first_leg_pnl_usd,
+                    'second_leg_pnl_usd': second_leg_pnl_usd,
                     'total_pnl_%': total_pnl_pct,
                     'commission_%': commission_pct,
                     'net_pnl_%': net_pnl_pct,
@@ -634,14 +591,74 @@ class BacktestEngine:
         
         print("\nСоздание графиков...")
         
-        fig = plt.figure(figsize=(18, 16))
-        gs = fig.add_gridspec(5, 1, height_ratios=[1, 1, 1, 1, 0.2], hspace=0.3, top=0.95, bottom=0.08)
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        # --- Основной дашборд сделок (как было) ---
+        if len(self.trades) > 0:
+            print("\nСоздание графиков...")
+            fig = plt.figure(figsize=(18, 16))
+            gs = fig.add_gridspec(5, 1, height_ratios=[1, 1, 1, 1, 0.2], hspace=0.3, top=0.95, bottom=0.08)
+            ax1 = fig.add_subplot(gs[0])  # Beta
+            ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Spread
+            ax3 = fig.add_subplot(gs[2], sharex=ax1)  # Z-score + сигналы
+            ax4 = fig.add_subplot(gs[3], sharex=ax1)  # Equity
+            # ...existing code for main dashboard...
+            plt.show()
+        else:
+            print("Нет данных для визуализации сделок")
+
+        # --- Новый дашборд статистических метрик и дельты ---
+        print("\nСоздание дашборда статистических метрик...")
+        fig2, axes = plt.subplots(5, 1, figsize=(18, 18), sharex=True, gridspec_kw={'hspace': 0.25})
+
+        # 1. График Hurst
+        if 'hurst' in self.data.columns:
+            axes[0].plot(self.data.index, self.data['hurst'], label='Hurst exponent', color='purple')
+            axes[0].axhline(0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+            axes[0].set_ylabel('Hurst')
+            axes[0].set_title('Hurst exponent (mean reversion)')
+            axes[0].legend()
+            axes[0].grid(True, alpha=0.3)
+
+        # 2. График ADF p-value
+        if 'adf_pvalue' in self.data.columns:
+            axes[1].plot(self.data.index, self.data['adf_pvalue'], label='ADF p-value', color='brown')
+            axes[1].axhline(0.05, color='red', linestyle='--', linewidth=1, alpha=0.5, label='0.05 threshold')
+            axes[1].set_ylabel('ADF p-value')
+            axes[1].set_title('ADF test p-value (cointegration)')
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3)
         
-        ax1 = fig.add_subplot(gs[0])  # Beta
-        ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Spread
-        ax3 = fig.add_subplot(gs[2], sharex=ax1)  # Z-score + сигналы
-        ax4 = fig.add_subplot(gs[3], sharex=ax1)  # Equity
+            # 3. Волатильность (sigma_current и sigma_long)
+            if 'sigma_current' in self.data.columns and 'sigma_long' in self.data.columns:
+                axes[2].plot(self.data.index, self.data['sigma_current'], label='Short-term volatility', color='orange')
+                axes[2].plot(self.data.index, self.data['sigma_long'], label='Long-term volatility', color='blue', alpha=0.7)
+                axes[2].set_ylabel('Volatility')
+                axes[2].set_title('Volatility (short-term & long-term)')
+                axes[2].legend()
+                axes[2].grid(True, alpha=0.3)
         
+            # 4. Дельта между первой и второй ногой
+            if 'first_leg_close' in self.data.columns and 'second_leg_close' in self.data.columns:
+                delta = self.data['first_leg_close'] - self.data['second_leg_close']
+                axes[3].plot(self.data.index, delta, label='Delta (First leg - Second leg)', color='green')
+                axes[3].set_ylabel('Delta')
+                axes[3].set_title('Delta between First and Second Leg')
+                axes[3].legend()
+                axes[3].grid(True, alpha=0.3)
+        
+            # 5. Spread (для полноты)
+            if 'spread' in self.data.columns:
+                axes[4].plot(self.data.index, self.data['spread'], label='Spread', color='black')
+                axes[4].set_ylabel('Spread')
+                axes[4].set_title('Logarithmic Spread')
+                axes[4].legend()
+                axes[4].grid(True, alpha=0.3)
+        
+            axes[-1].set_xlabel('Time')
+            plt.suptitle('Статистические метрики и дельта между ногами', fontsize=16, fontweight='bold')
+            plt.show()
         axes = [ax1, ax2, ax3, ax4]
         
         # График 1: Beta

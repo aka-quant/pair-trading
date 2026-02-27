@@ -35,14 +35,14 @@ def main():
     engine = BacktestEngine(config)
     
     # Загрузка данных
-    btc_1h, eth_1h = engine.load_data()
+    first_leg, second_leg = engine.load_data()
     
     # Сохраняем данные для использования в расчетах
-    engine.btc_data = btc_1h
-    engine.eth_data = eth_1h
+    engine.first_leg_data = first_leg
+    engine.second_leg_data = second_leg
     
     # Расчет индикаторов (Beta, Spread, Z-score, Volatility filter)
-    data = engine.calculate_indicators(btc_1h, eth_1h)
+    data = engine.calculate_indicators(first_leg, second_leg)
     engine.data = data  # Сохраняем для визуализации
     
     # Инициализация стратегии
@@ -58,6 +58,9 @@ def main():
     engine.save_results()
     
     # Визуализация
+    # Визуализация статистических метрик (строится всегда)
+    engine.plot_stats_dashboard()
+    # Визуализация сделок (только если есть сделки)
     engine.plot_results()
     
     print(f"\n{'='*70}")
