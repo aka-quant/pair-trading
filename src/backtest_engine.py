@@ -522,19 +522,19 @@ class BacktestEngine:
         print(f"{'='*60}")
         
         print(f"\nBTC нога:")
-        print(f"  Средний вес в позиции: {exit_trades['btc_weight'].mean():.4f} ({exit_trades['btc_weight'].mean()*100:.2f}%)")
-        print(f"  Средний P&L: {exit_trades['btc_pnl_%'].mean():.4f}%")
-        print(f"  Средний P&L в USD: ${exit_trades['btc_pnl_usd'].mean():.2f}")
-        print(f"  Макс профит: {exit_trades['btc_pnl_%'].max():.4f}%")
-        print(f"  Макс убыток: {exit_trades['btc_pnl_%'].min():.4f}%")
-        
+        print(f"  Средний вес в позиции: {exit_trades['first_leg_weight'].mean():.4f} ({exit_trades['first_leg_weight'].mean()*100:.2f}%)")
+        print(f"  Средний P&L: {exit_trades['first_leg_pnl_%'].mean():.4f}%")
+        print(f"  Средний P&L в USD: ${exit_trades['first_leg_pnl_usd'].mean():.2f}")
+        print(f"  Макс профит: {exit_trades['first_leg_pnl_%'].max():.4f}%")
+        print(f"  Макс убыток: {exit_trades['first_leg_pnl_%'].min():.4f}%")
+            
         print(f"\nETH нога:")
-        print(f"  Средний вес в позиции: {exit_trades['eth_weight'].mean():.4f} ({exit_trades['eth_weight'].mean()*100:.2f}%)")
-        print(f"  Средний P&L: {exit_trades['eth_pnl_%'].mean():.4f}%")
-        print(f"  Средний P&L в USD: ${exit_trades['eth_pnl_usd'].mean():.2f}")
-        print(f"  Макс профит: {exit_trades['eth_pnl_%'].max():.4f}%")
-        print(f"  Макс убыток: {exit_trades['eth_pnl_%'].min():.4f}%")
-        
+        print(f"  Средний вес в позиции: {exit_trades['second_leg_weight'].mean():.4f} ({exit_trades['second_leg_weight'].mean()*100:.2f}%)")
+        print(f"  Средний P&L: {exit_trades['second_leg_pnl_%'].mean():.4f}%")
+        print(f"  Средний P&L в USD: ${exit_trades['second_leg_pnl_usd'].mean():.2f}")
+        print(f"  Макс профит: {exit_trades['second_leg_pnl_%'].max():.4f}%")
+        print(f"  Макс убыток: {exit_trades['second_leg_pnl_%'].min():.4f}%")
+            
         print(f"\nОбщая статистика:")
         print(f"  Средняя Beta: {exit_trades['beta'].mean():.4f}")
         print(f"  Beta (мин/макс): {exit_trades['beta'].min():.4f} / {exit_trades['beta'].max():.4f}")
@@ -573,7 +573,7 @@ class BacktestEngine:
         print(f"\n{'='*60}")
         print("ПЕРВЫЕ 5 СДЕЛОК:")
         print(f"{'='*60}")
-        display_cols = ['timestamp', 'type', 'beta', 'z_score', 'btc_pnl_%', 'eth_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
+        display_cols = ['timestamp', 'type', 'beta', 'z_score', 'first_leg_pnl_%', 'second_leg_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
         print(exit_trades[display_cols].head(5).to_string(index=False))
     
     def save_results(self):
@@ -588,79 +588,21 @@ class BacktestEngine:
         if len(self.trades) == 0:
             print("Нет данных для визуализации")
             return
-        
+
         print("\nСоздание графиков...")
-        
         import matplotlib.pyplot as plt
         import numpy as np
+        import matplotlib.dates as mdates
 
-        # --- Основной дашборд сделок (как было) ---
-        if len(self.trades) > 0:
-            print("\nСоздание графиков...")
-            fig = plt.figure(figsize=(18, 16))
-            gs = fig.add_gridspec(5, 1, height_ratios=[1, 1, 1, 1, 0.2], hspace=0.3, top=0.95, bottom=0.08)
-            ax1 = fig.add_subplot(gs[0])  # Beta
-            ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Spread
-            ax3 = fig.add_subplot(gs[2], sharex=ax1)  # Z-score + сигналы
-            ax4 = fig.add_subplot(gs[3], sharex=ax1)  # Equity
-            # ...existing code for main dashboard...
-            plt.show()
-        else:
-            print("Нет данных для визуализации сделок")
+        # --- 1. Дашборд по сделкам (equity, сигналы, сделки) ---
+        print("\nСоздание дашборда по сделкам...")
+        fig = plt.figure(figsize=(18, 16))
+        gs = fig.add_gridspec(5, 1, height_ratios=[1, 1, 1, 1, 0.2], hspace=0.3, top=0.95, bottom=0.08)
+        ax1 = fig.add_subplot(gs[0])  # Beta
+        ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Spread
+        ax3 = fig.add_subplot(gs[2], sharex=ax1)  # Z-score + сигналы
+        ax4 = fig.add_subplot(gs[3], sharex=ax1)  # Equity
 
-        # --- Новый дашборд статистических метрик и дельты ---
-        print("\nСоздание дашборда статистических метрик...")
-        fig2, axes = plt.subplots(5, 1, figsize=(18, 18), sharex=True, gridspec_kw={'hspace': 0.25})
-
-        # 1. График Hurst
-        if 'hurst' in self.data.columns:
-            axes[0].plot(self.data.index, self.data['hurst'], label='Hurst exponent', color='purple')
-            axes[0].axhline(0.5, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-            axes[0].set_ylabel('Hurst')
-            axes[0].set_title('Hurst exponent (mean reversion)')
-            axes[0].legend()
-            axes[0].grid(True, alpha=0.3)
-
-        # 2. График ADF p-value
-        if 'adf_pvalue' in self.data.columns:
-            axes[1].plot(self.data.index, self.data['adf_pvalue'], label='ADF p-value', color='brown')
-            axes[1].axhline(0.05, color='red', linestyle='--', linewidth=1, alpha=0.5, label='0.05 threshold')
-            axes[1].set_ylabel('ADF p-value')
-            axes[1].set_title('ADF test p-value (cointegration)')
-            axes[1].legend()
-            axes[1].grid(True, alpha=0.3)
-        
-            # 3. Волатильность (sigma_current и sigma_long)
-            if 'sigma_current' in self.data.columns and 'sigma_long' in self.data.columns:
-                axes[2].plot(self.data.index, self.data['sigma_current'], label='Short-term volatility', color='orange')
-                axes[2].plot(self.data.index, self.data['sigma_long'], label='Long-term volatility', color='blue', alpha=0.7)
-                axes[2].set_ylabel('Volatility')
-                axes[2].set_title('Volatility (short-term & long-term)')
-                axes[2].legend()
-                axes[2].grid(True, alpha=0.3)
-        
-            # 4. Дельта между первой и второй ногой
-            if 'first_leg_close' in self.data.columns and 'second_leg_close' in self.data.columns:
-                delta = self.data['first_leg_close'] - self.data['second_leg_close']
-                axes[3].plot(self.data.index, delta, label='Delta (First leg - Second leg)', color='green')
-                axes[3].set_ylabel('Delta')
-                axes[3].set_title('Delta between First and Second Leg')
-                axes[3].legend()
-                axes[3].grid(True, alpha=0.3)
-        
-            # 5. Spread (для полноты)
-            if 'spread' in self.data.columns:
-                axes[4].plot(self.data.index, self.data['spread'], label='Spread', color='black')
-                axes[4].set_ylabel('Spread')
-                axes[4].set_title('Logarithmic Spread')
-                axes[4].legend()
-                axes[4].grid(True, alpha=0.3)
-        
-            axes[-1].set_xlabel('Time')
-            plt.suptitle('Статистические метрики и дельта между ногами', fontsize=16, fontweight='bold')
-            plt.show()
-        axes = [ax1, ax2, ax3, ax4]
-        
         # График 1: Beta
         ax1.plot(self.data.index, self.data['beta'], label='Beta (hedge ratio)', linewidth=1.5, color='blue')
         ax1.axhline(y=1.0, color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
@@ -668,7 +610,7 @@ class BacktestEngine:
         ax1.set_ylabel('Beta', fontsize=10)
         ax1.legend(loc='best')
         ax1.grid(True, alpha=0.3)
-        
+
         # График 2: Spread
         ax2.plot(self.data.index, self.data['spread'], label='Log Spread', linewidth=1, color='purple')
         ax2.plot(self.data.index, self.data['spread_mean'], label='Mean', linewidth=1.5, color='orange', linestyle='--')
@@ -680,23 +622,23 @@ class BacktestEngine:
         ax2.set_ylabel('Spread', fontsize=10)
         ax2.legend(loc='best')
         ax2.grid(True, alpha=0.3)
-        
+
         # График 3: Z-score + сигналы
         ax3.plot(self.data.index, self.data['z_score'], label='Z-score', linewidth=1, color='darkblue')
         ax3.axhline(y=self.config.Z_SCORE_ENTRY, color='green', linestyle='--', linewidth=1, label=f'+{self.config.Z_SCORE_ENTRY}σ')
         ax3.axhline(y=-self.config.Z_SCORE_ENTRY, color='red', linestyle='--', linewidth=1, label=f'-{self.config.Z_SCORE_ENTRY}σ')
         ax3.axhline(y=0, color='gray', linestyle='-', linewidth=0.5)
-        
+
         # Отмечаем сделки
         trades_df = pd.DataFrame(self.trades)
         entry_trades = trades_df[trades_df['type'].str.contains('ENTRY')].copy()
         exit_trades = trades_df[trades_df['type'].str.contains('EXIT')].copy()
-        
+
         long_entries = entry_trades[entry_trades['type'] == 'LONG_SPREAD_ENTRY']
         short_entries = entry_trades[entry_trades['type'] == 'SHORT_SPREAD_ENTRY']
         long_exits = exit_trades[exit_trades['type'] == 'LONG_SPREAD_EXIT']
         short_exits = exit_trades[exit_trades['type'] == 'SHORT_SPREAD_EXIT']
-        
+
         if len(long_entries) > 0:
             ax3.scatter(long_entries['timestamp'], long_entries['z_score'], 
                        color='green', marker='^', s=100, label='Long Entry', zorder=5, edgecolors='darkgreen', linewidth=1.5)
@@ -709,12 +651,12 @@ class BacktestEngine:
         if len(short_exits) > 0:
             ax3.scatter(short_exits['timestamp'], short_exits['z_score'], 
                        color='orange', marker='^', s=100, label='Short Exit', zorder=5, edgecolors='darkorange', linewidth=1.5)
-        
+
         ax3.set_title('Z-score и торговые сигналы', fontsize=13, fontweight='bold')
         ax3.set_ylabel('Z-score', fontsize=10)
         ax3.legend(loc='best', fontsize=8, ncol=2)
         ax3.grid(True, alpha=0.3)
-        
+
         # График 4: Equity
         equity_curve_df = pd.DataFrame(self.equity_curve)
         ax4.plot(equity_curve_df['timestamp'], equity_curve_df['equity'], 
@@ -726,18 +668,21 @@ class BacktestEngine:
         ax4.set_ylabel('Капитал ($)', fontsize=10)
         ax4.legend(loc='best')
         ax4.grid(True, alpha=0.3)
-        
+
         # Форматирование оси X
         ax4.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
         ax4.xaxis.set_major_locator(mdates.AutoDateLocator())
-        
+
         plt.tight_layout()
-        
+
         if self.config.SAVE_CHART:
             plt.savefig(self.config.CHART_FILE, dpi=self.config.CHART_DPI, bbox_inches='tight')
             print(f"График сохранен в '{self.config.CHART_FILE}'")
-        
+
         if self.config.SHOW_CHART:
             plt.show()
         else:
             plt.close()
+
+        # --- 2. Статистический дашборд ---
+        self.plot_stats_dashboard()

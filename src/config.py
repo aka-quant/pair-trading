@@ -4,8 +4,8 @@
 """
 
 # === Параметры данных ===
-FIRST_LEG = 'data/BTC-USDT_2022-05-27_2025-12-31_1H.csv'
-SECOND_LEG = 'data/BTC-USDT-SWAP_2022-05-27_2025-12-31_1H.csv'
+FIRST_LEG = 'data/BTC-USDT_2022-05-27_2025-12-31_1H_cleaned.csv'
+SECOND_LEG = 'data/BTC-USDT-SWAP_2022-05-27_2025-12-31_1H_cleaned.csv'
 
 # === Параметры стратегии "Парная торговля 2.0" ===
 
@@ -24,7 +24,7 @@ EXIT_MODE = 1  # 1 = Выход при возврате к 0 (консерват
                # 2 = Выход при пересечении противоположного порога (агрессивный, always in market)
 
 # --- Фильтр волатильности ---
-USE_VOLATILITY_FILTER = True  # Включить фильтр волатильности
+USE_VOLATILITY_FILTER = False  # Включить фильтр волатильности
 VOLATILITY_THRESHOLD = 0.8  # Входим только если σ_current >= 0.8 × σ_long
 VOLATILITY_LONG_LOOKBACK = 60  # Окно для расчета долгосрочной волатильности (60 баров)
 
@@ -37,7 +37,7 @@ ADF_PVALUE_THRESHOLD = 0.05  # Порог p-value для ADF теста (< 0.05 
 ADF_LOOKBACK = 60  # Окно данных для ADF теста (60 баров)
 
 # Hurst exponent - проверка mean reversion свойств
-USE_HURST_FILTER = True  # Использовать Hurst exponent для проверки mean reversion
+USE_HURST_FILTER = False  # Использовать Hurst exponent для проверки mean reversion
 HURST_MAX_THRESHOLD = 0.5  # Максимальный Hurst (< 0.5 = mean reverting)
 HURST_LOOKBACK = 60  # Окно данных для расчета Hurst (60 баров)
 
