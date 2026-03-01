@@ -349,6 +349,7 @@ class BacktestEngine:
         
         # Симулируем торговлю
         equity = self.config.INITIAL_CAPITAL
+        fixed_capital = self.config.INITIAL_CAPITAL
         position_open = False
         entry_data = None
         
@@ -358,18 +359,21 @@ class BacktestEngine:
                 print(f"\n⚠️ ВНИМАНИЕ: Капитал достиг нуля!")
                 print(f"Остановка на {signal['timestamp']}")
                 break
-            
+
             if 'ENTRY' in signal['type']:
                 # Открытие позиции
                 timestamp = signal['timestamp']
-                
+
                 # Получаем цены на момент входа
                 first_leg_price_entry = self.first_leg_data.loc[timestamp, 'close']
                 second_leg_price_entry = self.second_leg_data.loc[timestamp, 'close']
-                
-                # Размер позиции = весь капитал
-                position_size_usd = equity
-                
+
+                # Размер позиции: зависит от режима доходности
+                if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
+                    position_size_usd = fixed_capital
+                else:
+                    position_size_usd = equity
+
                 # Сохраняем данные входа
                 entry_data = {
                     'timestamp_entry': timestamp,
@@ -383,7 +387,7 @@ class BacktestEngine:
                     'equity_before': equity
                 }
                 position_open = True
-                
+
             elif 'EXIT' in signal['type'] and position_open:
                 # Закрытие позиции
                 timestamp = signal['timestamp']
@@ -423,7 +427,9 @@ class BacktestEngine:
                     commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
                     net_pnl_pct = total_pnl_pct - commission_pct
                     pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
-                    equity = entry_data['equity_before'] + pnl_usd
+                    if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
+                        # Капитал для сделки фиксированный, но equity растёт с накопленной прибылью
+                        equity = entry_data['equity_before'] + pnl_usd
                     entry_record = {
                         'timestamp': entry_data['timestamp_entry'],
                         'type': entry_data['type_entry'],
