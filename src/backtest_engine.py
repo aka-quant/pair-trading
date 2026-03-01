@@ -14,6 +14,25 @@ from statsmodels.tsa.stattools import adfuller  # ADF тест для коинт
 
 
 class BacktestEngine:
+    def print_backtest_settings(self):
+        print("\n================= STRATEGY SETTINGS =================")
+        cfg = self.config
+        print(f"Режим расчёта прибыли      : {'Простой' if cfg.SIMPLE_PROFIT_MODE else 'Сложный'}")
+        print(f"Beta lookback              : {cfg.BETA_LOOKBACK}")
+        print(f"Rolling beta               : {cfg.USE_ROLLING_BETA}")
+        print(f"Spread lookback            : {cfg.SPREAD_LOOKBACK}")
+        print(f"Z-score entry/exit         : {cfg.Z_SCORE_ENTRY} / {cfg.Z_SCORE_EXIT}")
+        print(f"Exit mode                  : {cfg.EXIT_MODE} ({'Возврат к 0' if cfg.EXIT_MODE==1 else 'Переворот/порог'})")
+        print(f"Volatility filter          : {cfg.USE_VOLATILITY_FILTER} (threshold={cfg.VOLATILITY_THRESHOLD}, long_lookback={cfg.VOLATILITY_LONG_LOOKBACK})")
+        print(f"ADF test                   : {cfg.USE_ADF_TEST} (p<{cfg.ADF_PVALUE_THRESHOLD}, lookback={cfg.ADF_LOOKBACK})")
+        print(f"Hurst filter               : {cfg.USE_HURST_FILTER} (max={cfg.HURST_MAX_THRESHOLD}, lookback={cfg.HURST_LOOKBACK})")
+        print(f"Cointegration filter       : {cfg.COINTEGRATION_CHECK_ENABLED}")
+        print(f"Initial capital            : {cfg.INITIAL_CAPITAL}")
+        print(f"Commission                 : {cfg.COMMISSION_RATE}%")
+        print(f"Save trades log            : {cfg.SAVE_TRADES_LOG}")
+        print(f"Save chart                 : {cfg.SAVE_CHART}")
+        print(f"Show chart                 : {cfg.SHOW_CHART}")
+        print("====================================================\n")
 
     def calculate_adf_test(self, spread, lookback):
         """
@@ -296,38 +315,7 @@ class BacktestEngine:
         print(f"Период: с {df.index[0]} по {df.index[-1]}")
         
         # Статистика
-        print(f"\n=== СТАТИСТИКА ИНДИКАТОРОВ ===")
-        if self.config.USE_ROLLING_BETA:
-            print(f"Beta (среднее): {df['beta'].mean():.4f}")
-            print(f"Beta (мин/макс): {df['beta'].min():.4f} / {df['beta'].max():.4f}")
-        print(f"Корреляция (среднее): {df['correlation'].mean():.4f}")
-        print(f"Z-score (мин/макс): {df['z_score'].min():.2f} / {df['z_score'].max():.2f}")
-        print(f"Спред (среднее): {df['spread'].mean():.6f}")
-        print(f"Спред (std): {df['spread'].std():.6f}")
-        
-        # Статистика коинтеграции
-        if self.config.USE_ADF_TEST:
-            cointegrated_pct = df['is_cointegrated'].sum() / len(df) * 100
-            print(f"\n=== КОИНТЕГРАЦИЯ (ADF тест) ===")
-            print(f"ADF p-value (среднее): {df['adf_pvalue'].mean():.4f}")
-            print(f"Коинтегрирован: {cointegrated_pct:.1f}% времени")
-            print(f"  (p-value < {self.config.ADF_PVALUE_THRESHOLD} = стационарен)")
-        
-        # Статистика Hurst
-        if self.config.USE_HURST_FILTER:
-            mean_reverting_pct = df['is_mean_reverting'].sum() / len(df) * 100
-            print(f"\n=== MEAN REVERSION (Hurst exponent) ===")
-            print(f"Hurst (среднее): {df['hurst'].mean():.4f}")
-            print(f"Hurst (мин/макс): {df['hurst'].min():.4f} / {df['hurst'].max():.4f}")
-            print(f"Mean reverting: {mean_reverting_pct:.1f}% времени")
-            print(f"  (Hurst < {self.config.HURST_MAX_THRESHOLD} = mean reverting)")
-        
-        # Общая статистика торговли
-        if self.config.COINTEGRATION_CHECK_ENABLED:
-            can_trade_pct = df['can_trade'].sum() / len(df) * 100
-            print(f"\n=== РАЗРЕШЕНА ТОРГОВЛЯ ===")
-            print(f"Можно торговать: {can_trade_pct:.1f}% времени")
-            print(f"  (коинтегрирован И mean reverting)")
+    # ...удалён блок статистики индикаторов, коинтеграции, Hurst, can_trade...
         
         return df
     
@@ -351,30 +339,23 @@ class BacktestEngine:
         equity = self.config.INITIAL_CAPITAL
         fixed_capital = self.config.INITIAL_CAPITAL
         position_open = False
+        position = None  # None, 'long', 'short'
         entry_data = None
-        
         for signal in signals:
-            # Защита от отрицательного капитала
             if equity <= 0:
                 print(f"\n⚠️ ВНИМАНИЕ: Капитал достиг нуля!")
                 print(f"Остановка на {signal['timestamp']}")
                 break
 
-            if 'ENTRY' in signal['type']:
-                # Открытие позиции
+            # ENTRY LONG
+            if signal['type'] == 'LONG_SPREAD_ENTRY' and position is None:
                 timestamp = signal['timestamp']
-
-                # Получаем цены на момент входа
                 first_leg_price_entry = self.first_leg_data.loc[timestamp, 'close']
                 second_leg_price_entry = self.second_leg_data.loc[timestamp, 'close']
-
-                # Размер позиции: зависит от режима доходности
                 if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
                     position_size_usd = fixed_capital
                 else:
                     position_size_usd = equity
-
-                # Сохраняем данные входа
                 entry_data = {
                     'timestamp_entry': timestamp,
                     'type_entry': signal['type'],
@@ -386,74 +367,76 @@ class BacktestEngine:
                     'position_size_usd': position_size_usd,
                     'equity_before': equity
                 }
-                position_open = True
+                position = 'long'
 
-            elif 'EXIT' in signal['type'] and position_open:
-                # Закрытие позиции
+            # ENTRY SHORT
+            elif signal['type'] == 'SHORT_SPREAD_ENTRY' and position is None:
                 timestamp = signal['timestamp']
-                
-                # Получаем цены на момент выхода
+                first_leg_price_entry = self.first_leg_data.loc[timestamp, 'close']
+                second_leg_price_entry = self.second_leg_data.loc[timestamp, 'close']
+                if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
+                    position_size_usd = fixed_capital
+                else:
+                    position_size_usd = equity
+                entry_data = {
+                    'timestamp_entry': timestamp,
+                    'type_entry': signal['type'],
+                    'spread_entry': signal['spread'],
+                    'z_score_entry': signal['z_score'],
+                    'beta': signal['beta'],
+                    'first_leg_price_entry': first_leg_price_entry,
+                    'second_leg_price_entry': second_leg_price_entry,
+                    'position_size_usd': position_size_usd,
+                    'equity_before': equity
+                }
+                position = 'short'
+
+            # EXIT LONG
+            elif signal['type'] == 'LONG_SPREAD_EXIT' and position == 'long':
+                timestamp = signal['timestamp']
                 first_leg_price_exit = self.first_leg_data.loc[timestamp, 'close']
                 second_leg_price_exit = self.second_leg_data.loc[timestamp, 'close']
-                
-                # Определяем тип сделки
-                is_long_spread = 'LONG' in signal['type']
-                
-                # Получаем beta коэффициент для расчета размеров позиций
                 beta = entry_data['beta']
-                
-                # Распределение капитала согласно beta (hedge ratio)
-                # Для нейтрального хеджа: weight_btc = 1/(1+beta), weight_eth = beta/(1+beta)
-                # Это обеспечивает dollar-neutral позицию с учетом корреляции активов
                 total_weight = 1.0 + beta
                 btc_weight = 1.0 / total_weight
                 eth_weight = beta / total_weight
-                
-                # Размеры позиций в USD
                 first_leg_position_usd = entry_data['position_size_usd'] * btc_weight
                 second_leg_position_usd = entry_data['position_size_usd'] * eth_weight
-                if is_long_spread:
-                    first_leg_pnl_pct = (first_leg_price_exit - entry_data['first_leg_price_entry']) / entry_data['first_leg_price_entry'] * 100
-                    first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
-                    second_leg_pnl_pct = (entry_data['second_leg_price_entry'] - second_leg_price_exit) / entry_data['second_leg_price_entry'] * 100
-                    second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
-                else:
-                    first_leg_pnl_pct = (entry_data['first_leg_price_entry'] - first_leg_price_exit) / entry_data['first_leg_price_entry'] * 100
-                    first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
-                    second_leg_pnl_pct = (second_leg_price_exit - entry_data['second_leg_price_entry']) / entry_data['second_leg_price_entry'] * 100
-                    second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
-                    total_pnl_usd = first_leg_pnl_usd + second_leg_pnl_usd
-                    total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
-                    commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
-                    net_pnl_pct = total_pnl_pct - commission_pct
-                    pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
-                    if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
-                        # Капитал для сделки фиксированный, но equity растёт с накопленной прибылью
-                        equity = entry_data['equity_before'] + pnl_usd
-                    entry_record = {
-                        'timestamp': entry_data['timestamp_entry'],
-                        'type': entry_data['type_entry'],
-                        'spread': entry_data['spread_entry'],
-                        'z_score': entry_data['z_score_entry'],
-                        'beta': entry_data['beta'],
-                        'first_leg_price': entry_data['first_leg_price_entry'],
-                        'second_leg_price': entry_data['second_leg_price_entry'],
-                        'position_size_usd': entry_data['position_size_usd'],
-                        'first_leg_weight': btc_weight,
-                        'second_leg_weight': eth_weight,
-                        'first_leg_position_usd': first_leg_position_usd,
-                        'second_leg_position_usd': second_leg_position_usd,
-                        'equity_before': entry_data['equity_before'],
-                        'first_leg_pnl_%': None,
-                        'second_leg_pnl_%': None,
-                        'first_leg_pnl_usd': None,
-                        'second_leg_pnl_usd': None,
-                        'total_pnl_%': None,
-                        'commission_%': None,
-                        'net_pnl_%': None,
-                        'pnl_usd': None,
-                        'equity_after': None
-                    }
+                first_leg_pnl_pct = (first_leg_price_exit - entry_data['first_leg_price_entry']) / entry_data['first_leg_price_entry'] * 100
+                first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
+                second_leg_pnl_pct = (entry_data['second_leg_price_entry'] - second_leg_price_exit) / entry_data['second_leg_price_entry'] * 100
+                second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
+                total_pnl_usd = first_leg_pnl_usd + second_leg_pnl_usd
+                total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
+                commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
+                net_pnl_pct = total_pnl_pct - commission_pct
+                pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
+                if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
+                    equity = entry_data['equity_before'] + pnl_usd
+                entry_record = {
+                    'timestamp': entry_data['timestamp_entry'],
+                    'type': entry_data['type_entry'],
+                    'spread': entry_data['spread_entry'],
+                    'z_score': entry_data['z_score_entry'],
+                    'beta': entry_data['beta'],
+                    'first_leg_price': entry_data['first_leg_price_entry'],
+                    'second_leg_price': entry_data['second_leg_price_entry'],
+                    'position_size_usd': entry_data['position_size_usd'],
+                    'first_leg_weight': btc_weight,
+                    'second_leg_weight': eth_weight,
+                    'first_leg_position_usd': first_leg_position_usd,
+                    'second_leg_position_usd': second_leg_position_usd,
+                    'equity_before': entry_data['equity_before'],
+                    'first_leg_pnl_%': None,
+                    'second_leg_pnl_%': None,
+                    'first_leg_pnl_usd': None,
+                    'second_leg_pnl_usd': None,
+                    'total_pnl_%': None,
+                    'commission_%': None,
+                    'net_pnl_%': None,
+                    'pnl_usd': None,
+                    'equity_after': None
+                }
                 self.trades.append(entry_record)
                 exit_record = {
                     'timestamp': timestamp,
@@ -480,10 +463,84 @@ class BacktestEngine:
                     'equity_after': equity
                 }
                 self.trades.append(exit_record)
-                
-                position_open = False
+                position = None
                 entry_data = None
-            
+
+            # EXIT SHORT
+            elif signal['type'] == 'SHORT_SPREAD_EXIT' and position == 'short':
+                timestamp = signal['timestamp']
+                first_leg_price_exit = self.first_leg_data.loc[timestamp, 'close']
+                second_leg_price_exit = self.second_leg_data.loc[timestamp, 'close']
+                beta = entry_data['beta']
+                total_weight = 1.0 + beta
+                btc_weight = 1.0 / total_weight
+                eth_weight = beta / total_weight
+                first_leg_position_usd = entry_data['position_size_usd'] * btc_weight
+                second_leg_position_usd = entry_data['position_size_usd'] * eth_weight
+                first_leg_pnl_pct = (entry_data['first_leg_price_entry'] - first_leg_price_exit) / entry_data['first_leg_price_entry'] * 100
+                first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
+                second_leg_pnl_pct = (second_leg_price_exit - entry_data['second_leg_price_entry']) / entry_data['second_leg_price_entry'] * 100
+                second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
+                total_pnl_usd = first_leg_pnl_usd + second_leg_pnl_usd
+                total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
+                commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
+                net_pnl_pct = total_pnl_pct - commission_pct
+                pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
+                if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
+                    equity = entry_data['equity_before'] + pnl_usd
+                entry_record = {
+                    'timestamp': entry_data['timestamp_entry'],
+                    'type': entry_data['type_entry'],
+                    'spread': entry_data['spread_entry'],
+                    'z_score': entry_data['z_score_entry'],
+                    'beta': entry_data['beta'],
+                    'first_leg_price': entry_data['first_leg_price_entry'],
+                    'second_leg_price': entry_data['second_leg_price_entry'],
+                    'position_size_usd': entry_data['position_size_usd'],
+                    'first_leg_weight': btc_weight,
+                    'second_leg_weight': eth_weight,
+                    'first_leg_position_usd': first_leg_position_usd,
+                    'second_leg_position_usd': second_leg_position_usd,
+                    'equity_before': entry_data['equity_before'],
+                    'first_leg_pnl_%': None,
+                    'second_leg_pnl_%': None,
+                    'first_leg_pnl_usd': None,
+                    'second_leg_pnl_usd': None,
+                    'total_pnl_%': None,
+                    'commission_%': None,
+                    'net_pnl_%': None,
+                    'pnl_usd': None,
+                    'equity_after': None
+                }
+                self.trades.append(entry_record)
+                exit_record = {
+                    'timestamp': timestamp,
+                    'type': signal['type'],
+                    'spread': signal['spread'],
+                    'z_score': signal['z_score'],
+                    'beta': signal['beta'],
+                    'first_leg_price': first_leg_price_exit,
+                    'second_leg_price': second_leg_price_exit,
+                    'position_size_usd': entry_data['position_size_usd'],
+                    'first_leg_weight': btc_weight,
+                    'second_leg_weight': eth_weight,
+                    'first_leg_position_usd': first_leg_position_usd,
+                    'second_leg_position_usd': second_leg_position_usd,
+                    'equity_before': entry_data['equity_before'],
+                    'first_leg_pnl_%': first_leg_pnl_pct,
+                    'second_leg_pnl_%': second_leg_pnl_pct,
+                    'first_leg_pnl_usd': first_leg_pnl_usd,
+                    'second_leg_pnl_usd': second_leg_pnl_usd,
+                    'total_pnl_%': total_pnl_pct,
+                    'commission_%': commission_pct,
+                    'net_pnl_%': net_pnl_pct,
+                    'pnl_usd': pnl_usd,
+                    'equity_after': equity
+                }
+                self.trades.append(exit_record)
+                position = None
+                entry_data = None
+
             # Сохраняем equity
             self.equity_curve.append({
                 'timestamp': signal['timestamp'],
@@ -493,62 +550,83 @@ class BacktestEngine:
         return self.trades, self.equity_curve
     
     def print_statistics(self):
-        """Печать статистики бэктеста"""
-        print(f"\n{'='*60}")
-        print("РЕЗУЛЬТАТЫ БЭКТЕСТА")
-        print(f"{'='*60}")
-        
-        if len(self.trades) == 0:
-            print("Сделок не найдено!")
-            return
-        
+        print("\n=========================  BACKTEST RESULTS  =========================")
         trades_df = pd.DataFrame(self.trades)
-        
-        # Только выходы
         exit_trades = trades_df[trades_df['type'].str.contains('EXIT')].copy()
-        
         if len(exit_trades) == 0:
-            print("Закрытых сделок не найдено!")
+            print("Нет закрытых сделок!")
             return
-        
-        print(f"\nВсего закрытых сделок: {len(exit_trades)}")
-        print(f"Long спред сделок: {len(exit_trades[exit_trades['type'] == 'LONG_SPREAD_EXIT'])}")
-        print(f"Short спред сделок: {len(exit_trades[exit_trades['type'] == 'SHORT_SPREAD_EXIT'])}")
-        
-        # Статистика
-        profitable = len(exit_trades[exit_trades['net_pnl_%'] > 0])
-        losing = len(exit_trades[exit_trades['net_pnl_%'] < 0])
-        
-        print(f"\nПрибыльных: {profitable}")
-        print(f"Убыточных: {losing}")
-        print(f"Винрейт: {profitable / len(exit_trades) * 100:.2f}%")
-        
-        print(f"\n{'='*60}")
-        print("СТАТИСТИКА ПО НОГАМ:")
-        print(f"{'='*60}")
-        
-        print(f"\nBTC нога:")
-        print(f"  Средний вес в позиции: {exit_trades['first_leg_weight'].mean():.4f} ({exit_trades['first_leg_weight'].mean()*100:.2f}%)")
-        print(f"  Средний P&L: {exit_trades['first_leg_pnl_%'].mean():.4f}%")
-        print(f"  Средний P&L в USD: ${exit_trades['first_leg_pnl_usd'].mean():.2f}")
-        print(f"  Макс профит: {exit_trades['first_leg_pnl_%'].max():.4f}%")
-        print(f"  Макс убыток: {exit_trades['first_leg_pnl_%'].min():.4f}%")
-            
-        print(f"\nETH нога:")
-        print(f"  Средний вес в позиции: {exit_trades['second_leg_weight'].mean():.4f} ({exit_trades['second_leg_weight'].mean()*100:.2f}%)")
-        print(f"  Средний P&L: {exit_trades['second_leg_pnl_%'].mean():.4f}%")
-        print(f"  Средний P&L в USD: ${exit_trades['second_leg_pnl_usd'].mean():.2f}")
-        print(f"  Макс профит: {exit_trades['second_leg_pnl_%'].max():.4f}%")
-        print(f"  Макс убыток: {exit_trades['second_leg_pnl_%'].min():.4f}%")
-            
-        print(f"\nОбщая статистика:")
-        print(f"  Средняя Beta: {exit_trades['beta'].mean():.4f}")
-        print(f"  Beta (мин/макс): {exit_trades['beta'].min():.4f} / {exit_trades['beta'].max():.4f}")
-        print(f"  Средний общий P&L: {exit_trades['total_pnl_%'].mean():.4f}%")
-        print(f"  Средний чистый P&L: {exit_trades['net_pnl_%'].mean():.4f}%")
-        print(f"  Макс профит: {exit_trades['net_pnl_%'].max():.4f}%")
-        print(f"  Макс убыток: {exit_trades['net_pnl_%'].min():.4f}%")
-        
+
+        # --- Финансовые метрики ---
+        start_balance = self.config.INITIAL_CAPITAL
+        final_balance = self.equity_curve[-1]['equity'] if self.equity_curve else start_balance
+        total_pnl = final_balance - start_balance
+        n_trades = len(exit_trades)
+        gross_profit = exit_trades[exit_trades['pnl_usd'] > 0]['pnl_usd'].sum()
+        gross_loss = exit_trades[exit_trades['pnl_usd'] < 0]['pnl_usd'].sum()
+        total_return = (final_balance / start_balance - 1) * 100
+        # Месячная доходность (CAGR)
+        n_months = max(1, (pd.to_datetime(exit_trades['timestamp']).max() - pd.to_datetime(exit_trades['timestamp']).min()).days / 30.44)
+        cagr = ((final_balance / start_balance) ** (1 / (n_months / 12)) - 1) * 100 if n_months > 0 else 0
+        # Max drawdown
+        equity_arr = np.array([x['equity'] for x in self.equity_curve])
+        roll_max = np.maximum.accumulate(equity_arr)
+        drawdown = roll_max - equity_arr
+        max_drawdown = np.max(drawdown)
+        max_drawdown_pct = max_drawdown / start_balance * 100
+
+        print("------------------- Финансовые метрики -------------------")
+        print(f"Капитал на начало      : {start_balance:12.2f}")
+        print(f"Капитал на конец       : {final_balance:12.2f}")
+        print(f"Суммарный PnL          : {total_pnl:12.2f}")
+        print(f"Total return           : {total_return:8.2f} %")
+        print(f"Месячная доходность    : {cagr:8.2f} % (CAGR)")
+        print(f"Максимальная просадка  : {max_drawdown:12.2f} ({max_drawdown_pct:.2f} %)")
+        print(f"Количество сделок      : {n_trades:6d}")
+        print("----------------------------------------------------------")
+
+        # --- Метрики по каждой ноге ---
+        print("\n------------------- Метрики по каждой ноге -------------------")
+        for leg, label in [("first_leg", "BTC/1st leg"), ("second_leg", "ETH/2nd leg")]:
+            mean_weight = exit_trades[f'{leg}_weight'].mean()
+            mean_pnl_pct = exit_trades[f'{leg}_pnl_%'].mean()
+            max_pnl_pct = exit_trades[f'{leg}_pnl_%'].max()
+            min_pnl_pct = exit_trades[f'{leg}_pnl_%'].min()
+            mean_pnl_usd = exit_trades[f'{leg}_pnl_usd'].mean()
+            print(f"{label:12}: Средний вес = {mean_weight:.4f}, Средний PnL = {mean_pnl_pct:.2f}%, Макс = {max_pnl_pct:.2f}%, Мин = {min_pnl_pct:.2f}%, Средний PnL $ = {mean_pnl_usd:.2f}")
+        print("---------------------------------------------------------------")
+
+        # --- Сделки, winrate, profit factor ---
+        win_trades = exit_trades[exit_trades['net_pnl_%'] > 0]
+        loss_trades = exit_trades[exit_trades['net_pnl_%'] < 0]
+        win_rate = len(win_trades) / n_trades * 100 if n_trades else 0
+        profit_factor = win_trades['pnl_usd'].sum() / abs(loss_trades['pnl_usd'].sum()) if len(loss_trades) else float('inf')
+        avg_win = win_trades['pnl_usd'].mean() if len(win_trades) else 0
+        avg_loss = loss_trades['pnl_usd'].mean() if len(loss_trades) else 0
+        expectancy = exit_trades['pnl_usd'].mean() if n_trades else 0
+
+        print("\n------------------- Метрики сделок -------------------")
+        print(f"Win rate               : {win_rate:8.2f} %")
+        print(f"Profit factor          : {profit_factor:8.2f}")
+        print(f"Avg win / Avg loss     : {avg_win:8.2f} / {avg_loss:8.2f}")
+        print(f"Expectancy (abs)       : {expectancy:8.2f}")
+        print(f"Gross profit           : {gross_profit:12.2f}")
+        print(f"Gross loss             : {gross_loss:12.2f}")
+        print("-----------------------------------------------------")
+
+        # --- Риск-метрики ---
+        returns = exit_trades['pnl_usd'] / start_balance
+        sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() > 0 else 0
+        sortino = returns.mean() / returns[returns < 0].std() * np.sqrt(252) if (returns < 0).std() > 0 else 0
+        calmar = (total_pnl / max_drawdown) if max_drawdown > 0 else float('inf')
+        recovery = (total_pnl / abs(gross_loss)) if gross_loss != 0 else float('inf')
+        print("\n------------------- Метрики риска и волатильности -------------------")
+        print(f"Sharpe ratio (trade)   : {sharpe:8.2f}")
+        print(f"Sortino ratio          : {sortino:8.2f}")
+        print(f"Calmar ratio           : {calmar:8.2f}")
+        print(f"Recovery factor        : {recovery:8.2f}")
+        print("--------------------------------------------------------------------")
+
         if self.config.COMMISSION_RATE > 0:
             print(f"\n  Общая комиссия: {exit_trades['commission_%'].sum():.4f}%")
         

@@ -17,39 +17,28 @@ def main():
     print("="*70)
     print()
     
-    # Вывод параметров стратегии
-    print("ПАРАМЕТРЫ СТРАТЕГИИ:")
-    print(f"  Z-score вход: ±{config.Z_SCORE_ENTRY}")
-    print(f"  Z-score выход: {config.Z_SCORE_EXIT}")
-    
-    exit_mode_desc = {
-        1: "Режим 1 - Выход при возврате к 0 (консервативный)",
-        2: "Режим 2 - Выход при противоположном пороге (агрессивный, always in market)"
-    }
-    print(f"  Режим выхода: {exit_mode_desc.get(config.EXIT_MODE, 'Неизвестный')}")
-    print(f"  Фильтр волатильности: {'ВКЛ' if config.USE_VOLATILITY_FILTER else 'ВЫКЛ'}")
-    print(f"  Фильтр коинтеграции: {'ВКЛ' if config.COINTEGRATION_CHECK_ENABLED else 'ВЫКЛ'}")
-    print()
-    
-    # Инициализация движка бэктестирования
+    # Новый красивый вывод параметров стратегии
     engine = BacktestEngine(config)
+    engine.print_backtest_settings()
     
     # Загрузка данных
     first_leg, second_leg = engine.load_data()
-    
-    # Сохраняем данные для использования в расчетах
     engine.first_leg_data = first_leg
     engine.second_leg_data = second_leg
-    
     # Расчет индикаторов (Beta, Spread, Z-score, Volatility filter)
     data = engine.calculate_indicators(first_leg, second_leg)
     engine.data = data  # Сохраняем для визуализации
-    
+
+
     # Инициализация стратегии
     strategy = PairTradingStrategy(data, config)
-    
+
     # Запуск бэктеста
     trades, equity_curve = engine.run_backtest(strategy)
+
+    # Сравнение: сколько сигналов ENTRY сработало при can_trade==True
+    entry_signals = [s for s in trades if 'ENTRY' in s.get('type','')]
+    print(f"\nENTRY сигналов: {len(entry_signals)}")
     
     # Вывод статистики
     engine.print_statistics()

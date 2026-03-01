@@ -180,16 +180,28 @@ class PairTradingStrategy:
     
     def generate_signals(self):
         """
-        Генерирует торговые сигналы на всей истории данных
-        
-        Returns:
-            list: список сигналов с информацией о типе, Z-score, спреде и индексе
+        Генерирует торговые сигналы на всей истории данных с учётом всех фильтров из конфига
         """
         signals = []
-        
+        # Сброс состояния позиции перед генерацией сигналов
+        self.position = 0
+        self.entry_z_score = 0
+
         for i in range(len(self.data)):
             current = self.data.iloc[i]
-            
+
+            # Универсальная проверка всех фильтров
+            if self.config.COINTEGRATION_CHECK_ENABLED and ('can_trade' in current and not current['can_trade']):
+                continue
+            if getattr(self.config, 'USE_ADF_TEST', False) and ('is_cointegrated' in current and not current['is_cointegrated']):
+                continue
+            if getattr(self.config, 'USE_HURST_FILTER', False) and ('is_mean_reverting' in current and not current['is_mean_reverting']):
+                continue
+            if getattr(self.config, 'USE_VOLATILITY_FILTER', False):
+                if 'sigma_current' in current and 'sigma_long' in current:
+                    if current['sigma_current'] < self.config.VOLATILITY_THRESHOLD * current['sigma_long']:
+                        continue
+
             # Если нет позиции, проверяем входы
             if self.position == 0:
                 if self.check_long_spread_entry(i):
@@ -205,7 +217,7 @@ class PairTradingStrategy:
                     })
                     self.position = 1
                     self.entry_z_score = current['z_score']
-                    
+
                 elif self.check_short_spread_entry(i):
                     signals.append({
                         'index': i,
@@ -219,7 +231,7 @@ class PairTradingStrategy:
                     })
                     self.position = -1
                     self.entry_z_score = current['z_score']
-            
+
             # Если есть long spread позиция, проверяем выход
             elif self.position == 1:
                 if self.check_long_spread_exit(i):
@@ -236,7 +248,7 @@ class PairTradingStrategy:
                     })
                     self.position = 0
                     self.entry_z_score = 0
-            
+
             # Если есть short spread позиция, проверяем выход
             elif self.position == -1:
                 if self.check_short_spread_exit(i):
@@ -253,5 +265,5 @@ class PairTradingStrategy:
                     })
                     self.position = 0
                     self.entry_z_score = 0
-        
+
         return signals
