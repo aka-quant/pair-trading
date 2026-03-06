@@ -26,7 +26,7 @@ class BacktestEngine:
         print(f"Volatility filter          : {cfg.USE_VOLATILITY_FILTER} (threshold={cfg.VOLATILITY_THRESHOLD}, long_lookback={cfg.VOLATILITY_LONG_LOOKBACK})")
         print(f"ADF test                   : {cfg.USE_ADF_TEST} (p<{cfg.ADF_PVALUE_THRESHOLD}, lookback={cfg.ADF_LOOKBACK})")
         print(f"Hurst filter               : {cfg.USE_HURST_FILTER} (max={cfg.HURST_MAX_THRESHOLD}, lookback={cfg.HURST_LOOKBACK})")
-        print(f"Cointegration filter       : {cfg.COINTEGRATION_CHECK_ENABLED}")
+    # print(f"Cointegration filter       : {cfg.COINTEGRATION_CHECK_ENABLED}")
         print(f"Initial capital            : {cfg.INITIAL_CAPITAL}")
         print(f"Commission                 : {cfg.COMMISSION_RATE}%")
         print(f"Save trades log            : {cfg.SAVE_TRADES_LOG}")
@@ -309,15 +309,13 @@ class BacktestEngine:
             )
             # is_mean_reverting = True если Hurst < порога
             df['is_mean_reverting'] = df['hurst'] < self.config.HURST_MAX_THRESHOLD
+            # Торговать только если коинтегрирован И mean reverting
+            df['can_trade'] = df['is_cointegrated'] & df['is_mean_reverting']
         else:
             df['hurst'] = 0.5
             df['is_mean_reverting'] = True
-        
-        # === КОМБИНИРОВАННЫЙ ФИЛЬТР: Торговать только если коинтегрирован И mean reverting ===
-        if self.config.COINTEGRATION_CHECK_ENABLED:
-            df['can_trade'] = df['is_cointegrated'] & df['is_mean_reverting']
-        else:
-            df['can_trade'] = True
+            # Торговать только если коинтегрирован
+            df['can_trade'] = df['is_cointegrated']
         
         # Удаляем NaN
         df = df.dropna()
@@ -422,8 +420,7 @@ class BacktestEngine:
                 commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
                 net_pnl_pct = total_pnl_pct - commission_pct
                 pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
-                if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
-                    equity = entry_data['equity_before'] + pnl_usd
+                equity = entry_data['equity_before'] + pnl_usd
                 entry_record = {
                     'timestamp': entry_data['timestamp_entry'],
                     'type': entry_data['type_entry'],
@@ -497,8 +494,7 @@ class BacktestEngine:
                 commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
                 net_pnl_pct = total_pnl_pct - commission_pct
                 pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
-                if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
-                    equity = entry_data['equity_before'] + pnl_usd
+                equity = entry_data['equity_before'] + pnl_usd
                 entry_record = {
                     'timestamp': entry_data['timestamp_entry'],
                     'type': entry_data['type_entry'],

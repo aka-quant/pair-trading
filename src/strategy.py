@@ -65,10 +65,9 @@ class PairTradingStrategy:
             
         current = self.data.iloc[i]
         
-        # ФИЛЬТР 1: Коинтеграция - разрешена ли торговля?
-        if self.config.COINTEGRATION_CHECK_ENABLED:
-            if not current['can_trade']:
-                return False  # Спред не коинтегрирован или не mean reverting
+        # ФИЛЬТР 1: Коинтеграция/стационарность/mean reversion - разрешена ли торговля?
+        if not current['can_trade']:
+            return False  # Спред не коинтегрирован или не mean reverting
         
         # ФИЛЬТР 2: Z-score (спред слишком низкий, ожидаем возврат вверх)
         z_condition = current['z_score'] < -self.config.Z_SCORE_ENTRY
@@ -98,10 +97,9 @@ class PairTradingStrategy:
             
         current = self.data.iloc[i]
         
-        # ФИЛЬТР 1: Коинтеграция - разрешена ли торговля?
-        if self.config.COINTEGRATION_CHECK_ENABLED:
-            if not current['can_trade']:
-                return False  # Спред не коинтегрирован или не mean reverting
+        # ФИЛЬТР 1: Коинтеграция/стационарность/mean reversion - разрешена ли торговля?
+        if not current['can_trade']:
+            return False  # Спред не коинтегрирован или не mean reverting
         
         # ФИЛЬТР 2: Z-score (спред слишком высокий, ожидаем возврат вниз)
         z_condition = current['z_score'] > self.config.Z_SCORE_ENTRY
@@ -191,7 +189,7 @@ class PairTradingStrategy:
             current = self.data.iloc[i]
 
             # Универсальная проверка всех фильтров
-            if self.config.COINTEGRATION_CHECK_ENABLED and ('can_trade' in current and not current['can_trade']):
+            if 'can_trade' in current and not current['can_trade']:
                 continue
             if getattr(self.config, 'USE_ADF_TEST', False) and ('is_cointegrated' in current and not current['is_cointegrated']):
                 continue

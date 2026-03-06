@@ -1,20 +1,20 @@
 # === Режим расчёта доходности ===
 # False = сложный процент (реинвестирование), True = простой процент (фикс. капитал)
-SIMPLE_PROFIT_MODE = True
+SIMPLE_PROFIT_MODE = False
 """
 Конфигурационный файл с параметрами стратегии и бэктеста
 Стратегия "Парная торговля 2.0" на основе статьи smart-lab.ru/mobile/topic/1265846/
 """
 
 # === Параметры данных ===
-FIRST_LEG = 'data/BTC-USDT_2022-05-27_2025-12-31_1H_cleaned.csv'
-SECOND_LEG = 'data/BTC-USDT-SWAP_2022-05-27_2025-12-31_1H_cleaned.csv'
+FIRST_LEG = 'data/BTC-USDT-SWAP_2021-01-01_2025-12-31_1H.csv'
+SECOND_LEG = 'data/ETH-USDT-SWAP_2021-01-01_2025-12-31_1H.csv'
 
 # === Параметры стратегии "Парная торговля 2.0" ===
 
 # --- Параметры Beta (hedge ratio) ---
 ## Параметры из статьи smart-lab.ru/blog/1265846.php
-BETA_LOOKBACK = 60  # Окно для расчета beta через OLS регрессию (60 баров)
+BETA_LOOKBACK = 100  # Окно для расчета beta через OLS регрессию (60 баров)
 USE_ROLLING_BETA = True  # Использовать ли скользящую beta (адаптация к изменению корреляции)
 
 # --- Параметры спреда и Z-score ---
@@ -37,7 +37,7 @@ VOLATILITY_LONG_LOOKBACK = 60  # Окно для расчета долгосро
 # ADF тест (Augmented Dickey-Fuller) - проверка стационарности спреда
 USE_ADF_TEST = True  # Использовать ADF тест для проверки коинтеграции
 ADF_PVALUE_THRESHOLD = 0.05  # Порог p-value для ADF теста (< 0.05 = стационарен)
-ADF_LOOKBACK = 60  # Окно данных для ADF теста (60 баров)
+ADF_LOOKBACK = 300  # Окно данных для ADF теста (60 баров)
 
 # Hurst exponent - проверка mean reversion свойств
 USE_HURST_FILTER = False  # Использовать Hurst exponent для проверки mean reversion
@@ -45,7 +45,6 @@ HURST_MAX_THRESHOLD = 0.5  # Максимальный Hurst (< 0.5 = mean revert
 HURST_LOOKBACK = 60  # Окно данных для расчета Hurst (60 баров)
 
 # Динамическая проверка коинтеграции
-COINTEGRATION_CHECK_ENABLED = True  # Включено для фильтрации по коинтеграции
 
 # === Параметры бэктеста ===
 INITIAL_CAPITAL = 10000  # Начальный капитал в долларах
