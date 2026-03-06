@@ -53,9 +53,10 @@ class BacktestEngine:
                 adf_pvalues.iloc[i] = 1.0
         return adf_pvalues
     def plot_stats_dashboard(self):
-        """Визуализация статистических метрик и дельты между ногами (строится всегда)"""
+        """Визуализация статистических метрик и дельты между ногами (строится всегда) и сохранение в папку backtest_results"""
         import matplotlib.pyplot as plt
         import numpy as np
+        import os
         print("\nСоздание дашборда статистических метрик...")
         fig2, axes = plt.subplots(5, 1, figsize=(18, 18), sharex=True, gridspec_kw={'hspace': 0.25})
         # 1. График Hurst
@@ -99,7 +100,17 @@ class BacktestEngine:
             axes[4].grid(True, alpha=0.3)
         axes[-1].set_xlabel('Time')
         plt.suptitle('Статистические метрики и дельта между ногами', fontsize=16, fontweight='bold')
-        plt.show()
+        # --- Сохранение дашборда ---
+        if self.config.SAVE_CHART:
+            results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backtest_results')
+            os.makedirs(results_dir, exist_ok=True)
+            dashboard_path = os.path.join(results_dir, 'dashboard.png')
+            plt.savefig(dashboard_path, dpi=150, bbox_inches='tight')
+            print(f"Дашборд сохранён в '{dashboard_path}'")
+        if self.config.SHOW_CHART:
+            plt.show()
+        else:
+            plt.close()
     """
     Движок для бэктестирования стратегии парного трейдинга с Z-score
     """
@@ -760,8 +771,12 @@ class BacktestEngine:
         plt.tight_layout()
 
         if self.config.SAVE_CHART:
-            plt.savefig(self.config.CHART_FILE, dpi=self.config.CHART_DPI, bbox_inches='tight')
-            print(f"График сохранен в '{self.config.CHART_FILE}'")
+            import os
+            results_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'backtest_results')
+            os.makedirs(results_dir, exist_ok=True)
+            chart_path = os.path.join(results_dir, 'equity_curve.png')
+            plt.savefig(chart_path, dpi=self.config.CHART_DPI, bbox_inches='tight')
+            print(f"График сохранён в '{chart_path}'")
 
         if self.config.SHOW_CHART:
             plt.show()

@@ -54,7 +54,7 @@ COMMISSION_RATE = 0.0    # Комиссия за сделку в процент�
 # === Параметры визуализации ===
 SAVE_TRADES_LOG = True   # Сохранять ли лог сделок
 TRADES_LOG_FILE = 'trades_log.xlsx'  # Формат Excel для корректного отображения столбцов
-SAVE_CHART = False       # Сохранять ли график результатов
+SAVE_CHART = True       # Сохранять ли график результатов
 CHART_FILE = 'backtest_results.png'
 CHART_DPI = 150          # Разрешение графика
 SHOW_CHART = True        # Показывать ли график после завершения
