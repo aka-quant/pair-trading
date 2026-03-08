@@ -660,6 +660,43 @@ class BacktestEngine:
             max_drawdown = drawdown.min()
             print(f"Макс просадка: {max_drawdown:.2f}%")
         
+        # --- Годовая доходность ---
+        print(f"\n{'='*70}")
+        print("ДОХОДНОСТЬ ПО ГОДАМ:")
+        print(f"{'='*70}")
+        
+        if len(self.equity_curve) > 0:
+            equity_df = pd.DataFrame(self.equity_curve)
+            equity_df['timestamp'] = pd.to_datetime(equity_df['timestamp'])
+            equity_df.set_index('timestamp', inplace=True)
+            
+            # Группируем по годам
+            years = equity_df.index.year.unique()
+            
+            print(f"{'Год':<8} {'Начало ($)':<15} {'Конец ($)':<15} {'Доход ($)':<15} {'Доход (%)':<12} {'Сделок':<10}")
+            print("-" * 70)
+            
+            for year in sorted(years):
+                year_data = equity_df[equity_df.index.year == year]
+                year_trades = exit_trades[pd.to_datetime(exit_trades['timestamp']).dt.year == year]
+                
+                if len(year_data) > 0:
+                    # Начальная equity = последняя equity предыдущего года или INITIAL_CAPITAL
+                    if year == years.min():
+                        start_equity = self.config.INITIAL_CAPITAL
+                    else:
+                        prev_year_data = equity_df[equity_df.index.year == year - 1]
+                        start_equity = prev_year_data['equity'].iloc[-1] if len(prev_year_data) > 0 else self.config.INITIAL_CAPITAL
+                    
+                    end_equity = year_data['equity'].iloc[-1]
+                    profit_usd = end_equity - start_equity
+                    profit_pct = (profit_usd / start_equity * 100) if start_equity > 0 else 0
+                    n_trades_year = len(year_trades)
+                    
+                    print(f"{year:<8} {start_equity:<15,.2f} {end_equity:<15,.2f} {profit_usd:<15,.2f} {profit_pct:<12.2f} {n_trades_year:<10}")
+            
+            print("-" * 70)
+        
         # Первые 5 сделок
         print(f"\n{'='*60}")
         print("ПЕРВЫЕ 5 СДЕЛОК:")

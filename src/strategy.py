@@ -232,7 +232,8 @@ class PairTradingStrategy:
 
             # Если есть long spread позиция, проверяем выход
             elif self.position == 1:
-                if self.check_long_spread_exit(i):
+                # ЗАЩИТА: Принудительный выход если спред потерял коинтеграцию
+                if 'can_trade' in current and not current['can_trade']:
                     signals.append({
                         'index': i,
                         'timestamp': self.data.index[i],
@@ -242,14 +243,32 @@ class PairTradingStrategy:
                         'first_leg_close': current['first_leg_close'],
                         'second_leg_close': current['second_leg_close'],
                         'entry_z_score': self.entry_z_score,
-                        'beta': current.get('beta', None)
+                        'beta': current.get('beta', None),
+                        'exit_reason': 'COINTEGRATION_LOST'
+                    })
+                    self.position = 0
+                    self.entry_z_score = 0
+                # Обычный выход по условиям стратегии
+                elif self.check_long_spread_exit(i):
+                    signals.append({
+                        'index': i,
+                        'timestamp': self.data.index[i],
+                        'type': 'LONG_SPREAD_EXIT',
+                        'z_score': current['z_score'],
+                        'spread': current['spread'],
+                        'first_leg_close': current['first_leg_close'],
+                        'second_leg_close': current['second_leg_close'],
+                        'entry_z_score': self.entry_z_score,
+                        'beta': current.get('beta', None),
+                        'exit_reason': 'NORMAL'
                     })
                     self.position = 0
                     self.entry_z_score = 0
 
             # Если есть short spread позиция, проверяем выход
             elif self.position == -1:
-                if self.check_short_spread_exit(i):
+                # ЗАЩИТА: Принудительный выход если спред потерял коинтеграцию
+                if 'can_trade' in current and not current['can_trade']:
                     signals.append({
                         'index': i,
                         'timestamp': self.data.index[i],
@@ -259,7 +278,24 @@ class PairTradingStrategy:
                         'first_leg_close': current['first_leg_close'],
                         'second_leg_close': current['second_leg_close'],
                         'entry_z_score': self.entry_z_score,
-                        'beta': current.get('beta', None)
+                        'beta': current.get('beta', None),
+                        'exit_reason': 'COINTEGRATION_LOST'
+                    })
+                    self.position = 0
+                    self.entry_z_score = 0
+                # Обычный выход по условиям стратегии
+                elif self.check_short_spread_exit(i):
+                    signals.append({
+                        'index': i,
+                        'timestamp': self.data.index[i],
+                        'type': 'SHORT_SPREAD_EXIT',
+                        'z_score': current['z_score'],
+                        'spread': current['spread'],
+                        'first_leg_close': current['first_leg_close'],
+                        'second_leg_close': current['second_leg_close'],
+                        'entry_z_score': self.entry_z_score,
+                        'beta': current.get('beta', None),
+                        'exit_reason': 'NORMAL'
                     })
                     self.position = 0
                     self.entry_z_score = 0
