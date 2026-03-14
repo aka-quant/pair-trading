@@ -26,7 +26,7 @@ class BacktestEngine:
         print(f"Volatility filter          : {cfg.USE_VOLATILITY_FILTER} (threshold={cfg.VOLATILITY_THRESHOLD}, long_lookback={cfg.VOLATILITY_LONG_LOOKBACK})")
         print(f"ADF test                   : {cfg.USE_ADF_TEST} (p<{cfg.ADF_PVALUE_THRESHOLD}, lookback={cfg.ADF_LOOKBACK})")
         print(f"Hurst filter               : {cfg.USE_HURST_FILTER} (max={cfg.HURST_MAX_THRESHOLD}, lookback={cfg.HURST_LOOKBACK})")
-    # print(f"Cointegration filter       : {cfg.COINTEGRATION_CHECK_ENABLED}")
+        print(f"Cointegration exit         : {getattr(cfg, 'USE_COINTEGRATION_EXIT', False)} (принудительный выход при потере коинтеграции)")
         print(f"Initial capital            : {cfg.INITIAL_CAPITAL}")
         print(f"Commission                 : {cfg.COMMISSION_RATE}%")
         print(f"Save trades log            : {cfg.SAVE_TRADES_LOG}")
@@ -468,7 +468,8 @@ class BacktestEngine:
                     'commission_%': commission_pct,
                     'net_pnl_%': net_pnl_pct,
                     'pnl_usd': pnl_usd,
-                    'equity_after': equity
+                    'equity_after': equity,
+                    'exit_reason': signal.get('exit_reason', 'NORMAL')  # Добавляем причину выхода
                 }
                 self.trades.append(exit_record)
                 position = None
@@ -542,7 +543,8 @@ class BacktestEngine:
                     'commission_%': commission_pct,
                     'net_pnl_%': net_pnl_pct,
                     'pnl_usd': pnl_usd,
-                    'equity_after': equity
+                    'equity_after': equity,
+                    'exit_reason': signal.get('exit_reason', 'NORMAL')  # Добавляем причину выхода
                 }
                 self.trades.append(exit_record)
                 position = None

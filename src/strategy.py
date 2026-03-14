@@ -55,64 +55,38 @@ class PairTradingStrategy:
         Проверка условия входа в LONG СПРЕД (Buy BTC, Sell ETH):
         - Z-score < -Z_SCORE_ENTRY (спред ниже среднего, BTC недооценен относительно ETH)
         - Фильтр волатильности: σ_current >= VOLATILITY_THRESHOLD × σ_long
-        - Фильтр коинтеграции: спред должен быть стационарен (ADF тест)
-        - Фильтр mean reversion: Hurst < 0.5
         
         Реальные позиции: LONG BTC + SHORT ETH
+        
+        Примечание: Фильтры коинтеграции, Hurst и волатильности проверяются 
+        в generate_signals() перед вызовом этой функции
         """
         if i == 0:
             return False
             
         current = self.data.iloc[i]
         
-        # ФИЛЬТР 1: Коинтеграция/стационарность/mean reversion - разрешена ли торговля?
-        if not current['can_trade']:
-            return False  # Спред не коинтегрирован или не mean reverting
-        
-        # ФИЛЬТР 2: Z-score (спред слишком низкий, ожидаем возврат вверх)
-        z_condition = current['z_score'] < -self.config.Z_SCORE_ENTRY
-        
-        # ФИЛЬТР 3: Волатильность (входим только в "нервном" рынке)
-        if self.config.USE_VOLATILITY_FILTER:
-            vola_condition = current['sigma_current'] >= (
-                self.config.VOLATILITY_THRESHOLD * current['sigma_long']
-            )
-        else:
-            vola_condition = True
-        
-        return z_condition and vola_condition
+        # Z-score (спред слишком низкий, ожидаем возврат вверх)
+        return current['z_score'] < -self.config.Z_SCORE_ENTRY
     
     def check_short_spread_entry(self, i):
         """
         Проверка условия входа в SHORT СПРЕД (Sell BTC, Buy ETH):
         - Z-score > +Z_SCORE_ENTRY (спред выше среднего, BTC переоценен относительно ETH)
         - Фильтр волатильности: σ_current >= VOLATILITY_THRESHOLD × σ_long
-        - Фильтр коинтеграции: спред должен быть стационарен (ADF тест)
-        - Фильтр mean reversion: Hurst < 0.5
         
         Реальные позиции: SHORT BTC + LONG ETH
+        
+        Примечание: Фильтры коинтеграции, Hurst и волатильности проверяются 
+        в generate_signals() перед вызовом этой функции
         """
         if i == 0:
             return False
             
         current = self.data.iloc[i]
         
-        # ФИЛЬТР 1: Коинтеграция/стационарность/mean reversion - разрешена ли торговля?
-        if not current['can_trade']:
-            return False  # Спред не коинтегрирован или не mean reverting
-        
-        # ФИЛЬТР 2: Z-score (спред слишком высокий, ожидаем возврат вниз)
-        z_condition = current['z_score'] > self.config.Z_SCORE_ENTRY
-        
-        # ФИЛЬТР 3: Волатильность
-        if self.config.USE_VOLATILITY_FILTER:
-            vola_condition = current['sigma_current'] >= (
-                self.config.VOLATILITY_THRESHOLD * current['sigma_long']
-            )
-        else:
-            vola_condition = True
-        
-        return z_condition and vola_condition
+        # Z-score (спред слишком высокий, ожидаем возврат вниз)
+        return current['z_score'] > self.config.Z_SCORE_ENTRY
     
     def check_long_spread_exit(self, i):
         """
@@ -123,8 +97,8 @@ class PairTradingStrategy:
         - Консервативный подход, есть периоды без позиций
         
         Режим 2 (EXIT_MODE = 2): Выход при пересечении противоположного порога
-        - Z-score пересекает +Z_SCORE_ENTRY (например, +1.5)
-        - Агрессивный подход, всегда в рынке (переворот в SHORT)
+        - Z-score пересекает +Z_SCORE_ENTRY (например, +1.5) снизу вверх
+        - Агрессивный подход, переворот в SHORT
         """
         if i == 0:
             return False
@@ -139,7 +113,7 @@ class PairTradingStrategy:
         
         elif self.config.EXIT_MODE == 2:
             # Режим 2: Выход при пересечении противоположного порога
-            # LONG → SHORT (переворот позиции)
+            # LONG закрываем когда Z-score пересекает +1.5 СНИЗУ ВВЕРХ
             return (previous['z_score'] <= self.config.Z_SCORE_ENTRY and 
                     current['z_score'] > self.config.Z_SCORE_ENTRY)
         
@@ -154,8 +128,8 @@ class PairTradingStrategy:
         - Консервативный подход, есть периоды без позиций
         
         Режим 2 (EXIT_MODE = 2): Выход при пересечении противоположного порога
-        - Z-score пересекает -Z_SCORE_ENTRY (например, -1.5)
-        - Агрессивный подход, всегда в рынке (переворот в LONG)
+        - Z-score пересекает -Z_SCORE_ENTRY (например, -1.5) сверху вниз
+        - Агрессивный подход, переворот в LONG
         """
         if i == 0:
             return False
@@ -170,7 +144,7 @@ class PairTradingStrategy:
         
         elif self.config.EXIT_MODE == 2:
             # Режим 2: Выход при пересечении противоположного порога
-            # SHORT → LONG (переворот позиции)
+            # SHORT закрываем когда Z-score пересекает -1.5 СВЕРХУ ВНИЗ
             return (previous['z_score'] >= -self.config.Z_SCORE_ENTRY and 
                     current['z_score'] < -self.config.Z_SCORE_ENTRY)
         
@@ -188,20 +162,19 @@ class PairTradingStrategy:
         for i in range(len(self.data)):
             current = self.data.iloc[i]
 
-            # Универсальная проверка всех фильтров
-            if 'can_trade' in current and not current['can_trade']:
-                continue
-            if getattr(self.config, 'USE_ADF_TEST', False) and ('is_cointegrated' in current and not current['is_cointegrated']):
-                continue
-            if getattr(self.config, 'USE_HURST_FILTER', False) and ('is_mean_reverting' in current and not current['is_mean_reverting']):
-                continue
-            if getattr(self.config, 'USE_VOLATILITY_FILTER', False):
-                if 'sigma_current' in current and 'sigma_long' in current:
-                    if current['sigma_current'] < self.config.VOLATILITY_THRESHOLD * current['sigma_long']:
-                        continue
-
-            # Если нет позиции, проверяем входы
+            # Если нет позиции, проверяем входы (применяем фильтры)
             if self.position == 0:
+                # Универсальная проверка всех фильтров (ТОЛЬКО ДЛЯ ВХОДОВ!)
+                if 'can_trade' in current and not current['can_trade']:
+                    continue
+                if getattr(self.config, 'USE_ADF_TEST', False) and ('is_cointegrated' in current and not current['is_cointegrated']):
+                    continue
+                if getattr(self.config, 'USE_HURST_FILTER', False) and ('is_mean_reverting' in current and not current['is_mean_reverting']):
+                    continue
+                if getattr(self.config, 'USE_VOLATILITY_FILTER', False):
+                    if 'sigma_current' in current and 'sigma_long' in current:
+                        if current['sigma_current'] < self.config.VOLATILITY_THRESHOLD * current['sigma_long']:
+                            continue
                 if self.check_long_spread_entry(i):
                     signals.append({
                         'index': i,
@@ -233,7 +206,8 @@ class PairTradingStrategy:
             # Если есть long spread позиция, проверяем выход
             elif self.position == 1:
                 # ЗАЩИТА: Принудительный выход если спред потерял коинтеграцию
-                if 'can_trade' in current and not current['can_trade']:
+                if (self.config.USE_COINTEGRATION_EXIT and 
+                    'can_trade' in current and not current['can_trade']):
                     signals.append({
                         'index': i,
                         'timestamp': self.data.index[i],
@@ -262,13 +236,35 @@ class PairTradingStrategy:
                         'beta': current.get('beta', None),
                         'exit_reason': 'NORMAL'
                     })
-                    self.position = 0
-                    self.entry_z_score = 0
+                    
+                    # EXIT_MODE = 2: Переворот позиции (LONG → SHORT)
+                    # НО ТОЛЬКО если все фильтры пройдены!
+                    if (self.config.EXIT_MODE == 2 and 
+                        current['z_score'] > self.config.Z_SCORE_ENTRY and
+                        current.get('can_trade', True)):  # Проверяем can_trade перед переворотом
+                        # Сразу входим в SHORT после выхода из LONG
+                        signals.append({
+                            'index': i,
+                            'timestamp': self.data.index[i],
+                            'type': 'SHORT_SPREAD_ENTRY',
+                            'z_score': current['z_score'],
+                            'spread': current['spread'],
+                            'first_leg_close': current['first_leg_close'],
+                            'second_leg_close': current['second_leg_close'],
+                            'beta': current.get('beta', None)
+                        })
+                        self.position = -1
+                        self.entry_z_score = current['z_score']
+                    else:
+                        # EXIT_MODE = 1 или фильтры не пройдены: Просто закрываем позицию
+                        self.position = 0
+                        self.entry_z_score = 0
 
             # Если есть short spread позиция, проверяем выход
             elif self.position == -1:
                 # ЗАЩИТА: Принудительный выход если спред потерял коинтеграцию
-                if 'can_trade' in current and not current['can_trade']:
+                if (self.config.USE_COINTEGRATION_EXIT and 
+                    'can_trade' in current and not current['can_trade']):
                     signals.append({
                         'index': i,
                         'timestamp': self.data.index[i],
@@ -297,7 +293,28 @@ class PairTradingStrategy:
                         'beta': current.get('beta', None),
                         'exit_reason': 'NORMAL'
                     })
-                    self.position = 0
-                    self.entry_z_score = 0
+                    
+                    # EXIT_MODE = 2: Переворот позиции (SHORT → LONG)
+                    # НО ТОЛЬКО если все фильтры пройдены!
+                    if (self.config.EXIT_MODE == 2 and 
+                        current['z_score'] < -self.config.Z_SCORE_ENTRY and
+                        current.get('can_trade', True)):  # Проверяем can_trade перед переворотом
+                        # Сразу входим в LONG после выхода из SHORT
+                        signals.append({
+                            'index': i,
+                            'timestamp': self.data.index[i],
+                            'type': 'LONG_SPREAD_ENTRY',
+                            'z_score': current['z_score'],
+                            'spread': current['spread'],
+                            'first_leg_close': current['first_leg_close'],
+                            'second_leg_close': current['second_leg_close'],
+                            'beta': current.get('beta', None)
+                        })
+                        self.position = 1
+                        self.entry_z_score = current['z_score']
+                    else:
+                        # EXIT_MODE = 1 или фильтры не пройдены: Просто закрываем позицию
+                        self.position = 0
+                        self.entry_z_score = 0
 
         return signals
