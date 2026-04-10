@@ -28,6 +28,7 @@ class BacktestEngine:
         print(f"Hurst filter               : {cfg.USE_HURST_FILTER} (max={cfg.HURST_MAX_THRESHOLD}, lookback={cfg.HURST_LOOKBACK})")
         print(f"Cointegration exit         : {getattr(cfg, 'USE_COINTEGRATION_EXIT', False)} (принудительный выход при потере коинтеграции)")
         print(f"Initial capital            : {cfg.INITIAL_CAPITAL}")
+        print(f"Leverage                   : {getattr(cfg, 'LEVERAGE', 1.0)}x")
         print(f"Commission                 : {cfg.COMMISSION_RATE}%")
         print(f"Save trades log            : {cfg.SAVE_TRADES_LOG}")
         print(f"Save chart                 : {cfg.SAVE_CHART}")
@@ -362,9 +363,31 @@ class BacktestEngine:
                 first_leg_price_entry = self.first_leg_data.loc[timestamp, 'close']
                 second_leg_price_entry = self.second_leg_data.loc[timestamp, 'close']
                 if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
-                    position_size_usd = fixed_capital
+                    base_capital = fixed_capital
                 else:
-                    position_size_usd = equity
+                    base_capital = equity
+                
+                # Применяем кредитное плечо к размеру позиции
+                leverage = getattr(self.config, 'LEVERAGE', 1.0)
+                position_size_usd = base_capital * leverage
+                
+                # Рассчитываем комиссию при открытии позиции
+                # Комиссия взимается от объема каждой ноги (с учетом плеча)
+                beta = signal['beta']
+                total_weight = 1.0 + beta
+                btc_weight = 1.0 / total_weight
+                eth_weight = beta / total_weight
+                first_leg_position_usd = position_size_usd * btc_weight
+                second_leg_position_usd = position_size_usd * eth_weight
+                
+                # Комиссия на открытие = размер_позиции * commission_rate / 100
+                first_leg_commission = first_leg_position_usd * self.config.COMMISSION_RATE / 100
+                second_leg_commission = second_leg_position_usd * self.config.COMMISSION_RATE / 100
+                total_entry_commission = first_leg_commission + second_leg_commission
+                
+                # Списываем комиссию с капитала
+                equity -= total_entry_commission
+                
                 entry_data = {
                     'timestamp_entry': timestamp,
                     'type_entry': signal['type'],
@@ -374,7 +397,10 @@ class BacktestEngine:
                     'first_leg_price_entry': first_leg_price_entry,
                     'second_leg_price_entry': second_leg_price_entry,
                     'position_size_usd': position_size_usd,
-                    'equity_before': equity
+                    'base_capital': base_capital,
+                    'leverage': leverage,
+                    'equity_before': equity,  # Сохраняем equity ПОСЛЕ вычета комиссии
+                    'entry_commission': total_entry_commission
                 }
                 position = 'long'
 
@@ -384,9 +410,31 @@ class BacktestEngine:
                 first_leg_price_entry = self.first_leg_data.loc[timestamp, 'close']
                 second_leg_price_entry = self.second_leg_data.loc[timestamp, 'close']
                 if getattr(self.config, 'SIMPLE_PROFIT_MODE', False):
-                    position_size_usd = fixed_capital
+                    base_capital = fixed_capital
                 else:
-                    position_size_usd = equity
+                    base_capital = equity
+                
+                # Применяем кредитное плечо к размеру позиции
+                leverage = getattr(self.config, 'LEVERAGE', 1.0)
+                position_size_usd = base_capital * leverage
+                
+                # Рассчитываем комиссию при открытии позиции
+                # Комиссия взимается от объема каждой ноги (с учетом плеча)
+                beta = signal['beta']
+                total_weight = 1.0 + beta
+                btc_weight = 1.0 / total_weight
+                eth_weight = beta / total_weight
+                first_leg_position_usd = position_size_usd * btc_weight
+                second_leg_position_usd = position_size_usd * eth_weight
+                
+                # Комиссия на открытие = размер_позиции * commission_rate / 100
+                first_leg_commission = first_leg_position_usd * self.config.COMMISSION_RATE / 100
+                second_leg_commission = second_leg_position_usd * self.config.COMMISSION_RATE / 100
+                total_entry_commission = first_leg_commission + second_leg_commission
+                
+                # Списываем комиссию с капитала
+                equity -= total_entry_commission
+                
                 entry_data = {
                     'timestamp_entry': timestamp,
                     'type_entry': signal['type'],
@@ -396,7 +444,10 @@ class BacktestEngine:
                     'first_leg_price_entry': first_leg_price_entry,
                     'second_leg_price_entry': second_leg_price_entry,
                     'position_size_usd': position_size_usd,
-                    'equity_before': equity
+                    'base_capital': base_capital,
+                    'leverage': leverage,
+                    'equity_before': equity,  # Сохраняем equity ПОСЛЕ вычета комиссии
+                    'entry_commission': total_entry_commission
                 }
                 position = 'short'
 
@@ -405,28 +456,37 @@ class BacktestEngine:
                 timestamp = signal['timestamp']
                 first_leg_price_exit = self.first_leg_data.loc[timestamp, 'close']
                 second_leg_price_exit = self.second_leg_data.loc[timestamp, 'close']
+                
                 beta = entry_data['beta']
                 total_weight = 1.0 + beta
                 btc_weight = 1.0 / total_weight
                 eth_weight = beta / total_weight
                 first_leg_position_usd = entry_data['position_size_usd'] * btc_weight
                 second_leg_position_usd = entry_data['position_size_usd'] * eth_weight
+                
+                # PnL по каждой ноге
                 first_leg_pnl_pct = (first_leg_price_exit - entry_data['first_leg_price_entry']) / entry_data['first_leg_price_entry'] * 100
                 first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
+                
                 second_leg_pnl_pct = (entry_data['second_leg_price_entry'] - second_leg_price_exit) / entry_data['second_leg_price_entry'] * 100
                 second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
+                
                 total_pnl_usd = first_leg_pnl_usd + second_leg_pnl_usd
                 total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
-                commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
-                net_pnl_pct = total_pnl_pct - commission_pct
-                pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
+                
+                # При закрытии комиссия НЕ списывается
+                pnl_usd = total_pnl_usd
                 equity = entry_data['equity_before'] + pnl_usd
+                
+                # Записываем entry
                 entry_record = {
                     'timestamp': entry_data['timestamp_entry'],
                     'type': entry_data['type_entry'],
                     'spread': entry_data['spread_entry'],
                     'z_score': entry_data['z_score_entry'],
                     'beta': entry_data['beta'],
+                    'leverage': entry_data['leverage'],
+                    'base_capital': entry_data['base_capital'],
                     'first_leg_price': entry_data['first_leg_price_entry'],
                     'second_leg_price': entry_data['second_leg_price_entry'],
                     'position_size_usd': entry_data['position_size_usd'],
@@ -435,23 +495,26 @@ class BacktestEngine:
                     'first_leg_position_usd': first_leg_position_usd,
                     'second_leg_position_usd': second_leg_position_usd,
                     'equity_before': entry_data['equity_before'],
+                    'entry_commission': entry_data['entry_commission'],
                     'first_leg_pnl_%': None,
                     'second_leg_pnl_%': None,
                     'first_leg_pnl_usd': None,
                     'second_leg_pnl_usd': None,
                     'total_pnl_%': None,
-                    'commission_%': None,
-                    'net_pnl_%': None,
                     'pnl_usd': None,
                     'equity_after': None
                 }
                 self.trades.append(entry_record)
+                
+                # Записываем exit
                 exit_record = {
                     'timestamp': timestamp,
                     'type': signal['type'],
                     'spread': signal['spread'],
                     'z_score': signal['z_score'],
                     'beta': signal['beta'],
+                    'leverage': entry_data['leverage'],
+                    'base_capital': entry_data['base_capital'],
                     'first_leg_price': first_leg_price_exit,
                     'second_leg_price': second_leg_price_exit,
                     'position_size_usd': entry_data['position_size_usd'],
@@ -460,18 +523,18 @@ class BacktestEngine:
                     'first_leg_position_usd': first_leg_position_usd,
                     'second_leg_position_usd': second_leg_position_usd,
                     'equity_before': entry_data['equity_before'],
+                    'entry_commission': entry_data['entry_commission'],
                     'first_leg_pnl_%': first_leg_pnl_pct,
                     'second_leg_pnl_%': second_leg_pnl_pct,
                     'first_leg_pnl_usd': first_leg_pnl_usd,
                     'second_leg_pnl_usd': second_leg_pnl_usd,
                     'total_pnl_%': total_pnl_pct,
-                    'commission_%': commission_pct,
-                    'net_pnl_%': net_pnl_pct,
                     'pnl_usd': pnl_usd,
                     'equity_after': equity,
-                    'exit_reason': signal.get('exit_reason', 'NORMAL')  # Добавляем причину выхода
+                    'exit_reason': signal.get('exit_reason', 'NORMAL')
                 }
                 self.trades.append(exit_record)
+                
                 position = None
                 entry_data = None
 
@@ -480,28 +543,37 @@ class BacktestEngine:
                 timestamp = signal['timestamp']
                 first_leg_price_exit = self.first_leg_data.loc[timestamp, 'close']
                 second_leg_price_exit = self.second_leg_data.loc[timestamp, 'close']
+                
                 beta = entry_data['beta']
                 total_weight = 1.0 + beta
                 btc_weight = 1.0 / total_weight
                 eth_weight = beta / total_weight
                 first_leg_position_usd = entry_data['position_size_usd'] * btc_weight
                 second_leg_position_usd = entry_data['position_size_usd'] * eth_weight
+                
+                # PnL по каждой ноге
                 first_leg_pnl_pct = (entry_data['first_leg_price_entry'] - first_leg_price_exit) / entry_data['first_leg_price_entry'] * 100
                 first_leg_pnl_usd = first_leg_position_usd * first_leg_pnl_pct / 100
+                
                 second_leg_pnl_pct = (second_leg_price_exit - entry_data['second_leg_price_entry']) / entry_data['second_leg_price_entry'] * 100
                 second_leg_pnl_usd = second_leg_position_usd * second_leg_pnl_pct / 100
+                
                 total_pnl_usd = first_leg_pnl_usd + second_leg_pnl_usd
                 total_pnl_pct = (total_pnl_usd / entry_data['position_size_usd']) * 100
-                commission_pct = abs(total_pnl_pct) * self.config.COMMISSION_RATE / 100
-                net_pnl_pct = total_pnl_pct - commission_pct
-                pnl_usd = entry_data['position_size_usd'] * net_pnl_pct / 100
+                
+                # При закрытии комиссия НЕ списывается
+                pnl_usd = total_pnl_usd
                 equity = entry_data['equity_before'] + pnl_usd
+                
+                # Записываем entry
                 entry_record = {
                     'timestamp': entry_data['timestamp_entry'],
                     'type': entry_data['type_entry'],
                     'spread': entry_data['spread_entry'],
                     'z_score': entry_data['z_score_entry'],
                     'beta': entry_data['beta'],
+                    'leverage': entry_data['leverage'],
+                    'base_capital': entry_data['base_capital'],
                     'first_leg_price': entry_data['first_leg_price_entry'],
                     'second_leg_price': entry_data['second_leg_price_entry'],
                     'position_size_usd': entry_data['position_size_usd'],
@@ -510,23 +582,26 @@ class BacktestEngine:
                     'first_leg_position_usd': first_leg_position_usd,
                     'second_leg_position_usd': second_leg_position_usd,
                     'equity_before': entry_data['equity_before'],
+                    'entry_commission': entry_data['entry_commission'],
                     'first_leg_pnl_%': None,
                     'second_leg_pnl_%': None,
                     'first_leg_pnl_usd': None,
                     'second_leg_pnl_usd': None,
                     'total_pnl_%': None,
-                    'commission_%': None,
-                    'net_pnl_%': None,
                     'pnl_usd': None,
                     'equity_after': None
                 }
                 self.trades.append(entry_record)
+                
+                # Записываем exit
                 exit_record = {
                     'timestamp': timestamp,
                     'type': signal['type'],
                     'spread': signal['spread'],
                     'z_score': signal['z_score'],
                     'beta': signal['beta'],
+                    'leverage': entry_data['leverage'],
+                    'base_capital': entry_data['base_capital'],
                     'first_leg_price': first_leg_price_exit,
                     'second_leg_price': second_leg_price_exit,
                     'position_size_usd': entry_data['position_size_usd'],
@@ -535,18 +610,18 @@ class BacktestEngine:
                     'first_leg_position_usd': first_leg_position_usd,
                     'second_leg_position_usd': second_leg_position_usd,
                     'equity_before': entry_data['equity_before'],
+                    'entry_commission': entry_data['entry_commission'],
                     'first_leg_pnl_%': first_leg_pnl_pct,
                     'second_leg_pnl_%': second_leg_pnl_pct,
                     'first_leg_pnl_usd': first_leg_pnl_usd,
                     'second_leg_pnl_usd': second_leg_pnl_usd,
                     'total_pnl_%': total_pnl_pct,
-                    'commission_%': commission_pct,
-                    'net_pnl_%': net_pnl_pct,
                     'pnl_usd': pnl_usd,
                     'equity_after': equity,
-                    'exit_reason': signal.get('exit_reason', 'NORMAL')  # Добавляем причину выхода
+                    'exit_reason': signal.get('exit_reason', 'NORMAL')
                 }
                 self.trades.append(exit_record)
+                
                 position = None
                 entry_data = None
 
@@ -574,23 +649,38 @@ class BacktestEngine:
         gross_profit = exit_trades[exit_trades['pnl_usd'] > 0]['pnl_usd'].sum()
         gross_loss = exit_trades[exit_trades['pnl_usd'] < 0]['pnl_usd'].sum()
         total_return = (final_balance / start_balance - 1) * 100
-        # Месячная доходность (CAGR)
-        n_months = max(1, (pd.to_datetime(exit_trades['timestamp']).max() - pd.to_datetime(exit_trades['timestamp']).min()).days / 30.44)
-        cagr = ((final_balance / start_balance) ** (1 / (n_months / 12)) - 1) * 100 if n_months > 0 else 0
-        # Max drawdown
+        
+        # Доходность с учетом плеча
+        leverage = getattr(self.config, 'LEVERAGE', 1.0)
+        
+        # CAGR - правильный расчет на основе количества ЛЕТ
+        start_date = pd.to_datetime(exit_trades['timestamp'].min())
+        end_date = pd.to_datetime(exit_trades['timestamp'].max())
+        n_years = (end_date - start_date).days / 365.25
+        cagr = ((final_balance / start_balance) ** (1 / n_years) - 1) * 100 if n_years > 0 else 0
+        
+        # Max drawdown - ПРАВИЛЬНЫЙ расчет
         equity_arr = np.array([x['equity'] for x in self.equity_curve])
-        roll_max = np.maximum.accumulate(equity_arr)
-        drawdown = roll_max - equity_arr
-        max_drawdown = np.max(drawdown)
-        max_drawdown_pct = max_drawdown / start_balance * 100
+        running_max = np.maximum.accumulate(equity_arr)  # Скользящий максимум
+        drawdown_arr = equity_arr - running_max  # Просадка в USD (всегда <= 0)
+        max_drawdown_usd = np.min(drawdown_arr)  # Максимальная просадка (отрицательное число)
+        
+        # Индекс максимальной просадки
+        max_dd_idx = np.argmin(drawdown_arr)
+        peak_before_dd = running_max[max_dd_idx]  # Пик перед максимальной просадкой
+        max_drawdown_pct = (max_drawdown_usd / peak_before_dd) * 100  # В процентах от пика
+        
+        min_equity = np.min(equity_arr)  # Минимальная точка equity
 
         print("------------------- Финансовые метрики -------------------")
         print(f"Капитал на начало      : {start_balance:12.2f}")
         print(f"Капитал на конец       : {final_balance:12.2f}")
         print(f"Суммарный PnL          : {total_pnl:12.2f}")
-        print(f"Total return           : {total_return:8.2f} %")
-        print(f"Месячная доходность    : {cagr:8.2f} % (CAGR)")
-        print(f"Максимальная просадка  : {max_drawdown:12.2f} ({max_drawdown_pct:.2f} %)")
+        print(f"Total return (ROE)     : {total_return:8.2f} % (с плечом {leverage}x)")
+        print(f"CAGR ({n_years:.1f} лет)      : {cagr:8.2f} % годовых")
+        print(f"Макс просадка          : {max_drawdown_usd:12.2f} USD ({max_drawdown_pct:.2f} %)")
+        print(f"Пик перед просадкой    : {peak_before_dd:12.2f}")
+        print(f"Мин. точка equity      : {min_equity:12.2f}")
         print(f"Количество сделок      : {n_trades:6d}")
         print("----------------------------------------------------------")
 
@@ -606,8 +696,8 @@ class BacktestEngine:
         print("---------------------------------------------------------------")
 
         # --- Сделки, winrate, profit factor ---
-        win_trades = exit_trades[exit_trades['net_pnl_%'] > 0]
-        loss_trades = exit_trades[exit_trades['net_pnl_%'] < 0]
+        win_trades = exit_trades[exit_trades['pnl_usd'] > 0]
+        loss_trades = exit_trades[exit_trades['pnl_usd'] < 0]
         win_rate = len(win_trades) / n_trades * 100 if n_trades else 0
         profit_factor = win_trades['pnl_usd'].sum() / abs(loss_trades['pnl_usd'].sum()) if len(loss_trades) else float('inf')
         avg_win = win_trades['pnl_usd'].mean() if len(win_trades) else 0
@@ -627,17 +717,22 @@ class BacktestEngine:
         returns = exit_trades['pnl_usd'] / start_balance
         sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() > 0 else 0
         sortino = returns.mean() / returns[returns < 0].std() * np.sqrt(252) if (returns < 0).std() > 0 else 0
-        calmar = (total_pnl / max_drawdown) if max_drawdown > 0 else float('inf')
+        calmar = (cagr / abs(max_drawdown_pct)) if max_drawdown_pct != 0 else float('inf')
         recovery = (total_pnl / abs(gross_loss)) if gross_loss != 0 else float('inf')
         print("\n------------------- Метрики риска и волатильности -------------------")
         print(f"Sharpe ratio (trade)   : {sharpe:8.2f}")
         print(f"Sortino ratio          : {sortino:8.2f}")
-        print(f"Calmar ratio           : {calmar:8.2f}")
+        print(f"Calmar ratio           : {calmar:8.2f} (CAGR / |Max DD%|)")
         print(f"Recovery factor        : {recovery:8.2f}")
         print("--------------------------------------------------------------------")
 
+        # --- Информация о комиссиях ---
         if self.config.COMMISSION_RATE > 0:
-            print(f"\n  Общая комиссия: {exit_trades['commission_%'].sum():.4f}%")
+            # Подсчитываем общую комиссию из entry записей
+            entry_trades = trades_df[trades_df['type'].str.contains('ENTRY')]
+            total_commission_usd = entry_trades['entry_commission'].sum()
+            total_commission_pct = (total_commission_usd / start_balance) * 100
+            print(f"\n  Общая комиссия: {total_commission_usd:.2f} USD ({total_commission_pct:.4f}% от начального капитала)")
         
         print(f"\n  Средний P&L в USD: {exit_trades['pnl_usd'].mean():.2f}")
         print(f"  Общий P&L в USD: {exit_trades['pnl_usd'].sum():.2f}")
@@ -648,12 +743,20 @@ class BacktestEngine:
             final_equity = equity_curve_df['equity'].iloc[-1]
             
             print(f"\n{'='*60}")
-            print("КАПИТАЛ:")
+            print("КАПИТАЛ И ПЛЕЧО:")
             print(f"{'='*60}")
             print(f"Начальный капитал: ${self.config.INITIAL_CAPITAL:,.2f}")
             print(f"Финальный капитал: ${final_equity:,.2f}")
             print(f"Общий доход: ${final_equity - self.config.INITIAL_CAPITAL:,.2f}")
             print(f"Доходность: {(final_equity - self.config.INITIAL_CAPITAL) / self.config.INITIAL_CAPITAL * 100:.2f}%")
+            
+            # Информация о плече
+            avg_position_size = exit_trades['position_size_usd'].mean()
+            avg_base_capital = exit_trades['base_capital'].mean() if 'base_capital' in exit_trades.columns else self.config.INITIAL_CAPITAL
+            avg_leverage_used = exit_trades['leverage'].mean() if 'leverage' in exit_trades.columns else leverage
+            print(f"\nПлечо: {leverage}x")
+            print(f"Средний размер позиции: ${avg_position_size:,.2f}")
+            print(f"Средний базовый капитал: ${avg_base_capital:,.2f}")
             
             # Просадка
             equity_array = equity_curve_df['equity'].values
@@ -703,7 +806,7 @@ class BacktestEngine:
         print(f"\n{'='*60}")
         print("ПЕРВЫЕ 5 СДЕЛОК:")
         print(f"{'='*60}")
-        display_cols = ['timestamp', 'type', 'beta', 'z_score', 'first_leg_pnl_%', 'second_leg_pnl_%', 'net_pnl_%', 'pnl_usd', 'equity_after']
+        display_cols = ['timestamp', 'type', 'beta', 'z_score', 'first_leg_pnl_%', 'second_leg_pnl_%', 'total_pnl_%', 'pnl_usd', 'equity_after']
         print(exit_trades[display_cols].head(5).to_string(index=False))
     
     def save_results(self):
