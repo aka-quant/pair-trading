@@ -1,85 +1,63 @@
-# Бэктестер стратегии парного трейдинга BTC/ETH
+# Pair Trading 2.0: бэктест BTC/ETH
 
-## 📁 Структура проекта
+Mean-reversion стратегия на спреде двух криптоактивов (OKX perpetual swap, 1H, 2021–2025).
+Идея: [«Парная торговля 2.0»](https://smart-lab.ru/mobile/topic/1265846/).
 
-```
-pair-trading/
-│
-├── main.py                 # Точка входа - запуск бэктеста
-│
-├── src/                    # Все модули стратегии
-│   ├── config.py          # Параметры, капитал, комиссии
-│   ├── strategy.py        # Логика торговой стратегии
-│   └── backtest_engine.py # Движок бэктестирования
-│
-├── data/                   # CSV файлы с данными
-│   ├── BTC-USDT-SWAP_2021-01-01_2025-12-31_15m.csv
-│   ├── BTC-USDT-SWAP_2021-01-01_2025-12-31_1H.csv
-│   ├── ETH-USDT-SWAP_2021-01-01_2025-12-31_15m.csv
-│   └── ETH-USDT-SWAP_2021-01-01_2025-12-31_1H.csv
-│
-└── README.md              # Документация
-```
+## Суть стратегии
 
-## 🚀 Запуск
+1. **Beta** — скользящий hedge ratio через OLS по логарифмам цен (`BETA_LOOKBACK = 200`).
+2. **Спред** = `log(BTC) − β·log(ETH)`, **Z-score** по окну `SPREAD_LOOKBACK = 200`.
+3. **Фильтр входа** — ADF-тест стационарности спреда (`p < 0.15`); опционально Hurst и фильтр волатильности.
+4. **Вход**: `Z < −1.5` → long спред (Buy BTC / Sell ETH), `Z > +1.5` → short спред.
+5. **Выход** (`EXIT_MODE`): `1` — возврат Z к 0; `2` — пересечение противоположного порога (переворот, всегда в рынке).
+6. Одна позиция одновременно, плечо `2x`, комиссия `0.05%` на ногу.
+
+## Запуск
 
 ```bash
-python main.py
+pip install -r requirements.txt
+python main.py                      # бэктест: статистика в терминале, trades_log.xlsx, графики
+python scripts/quantstats_report.py # (опц.) HTML-отчёт QuantStats по trades_log.xlsx
 ```
 
-## ⚙️ Настройка
+Данные берутся из `data/` (CSV, в git не хранятся; пути — `FIRST_LEG` / `SECOND_LEG` в `src/config.py`).
 
-### Параметры (src/config.py)
+## Точки входа
 
-```python
-# Индикаторы
-LEN_LONG = 100          # Длина долгосрочной MA
-LEN_SHORT = 10          # Длина краткосрочной MA
-MEDIAN_PERIOD = 1000    # Период для медианы и σ
-SIGMA_THRESHOLD = 2.0   # Порог (±2σ)
+| Файл | Назначение |
+|---|---|
+| [main.py](main.py) | запуск бэктеста: загрузка → индикаторы → сигналы → статистика → графики |
+| [src/config.py](src/config.py) | все параметры: данные, окна, пороги, фильтры, капитал, плечо, комиссия |
+| [src/strategy.py](src/strategy.py) | `PairTradingStrategy`: условия входа/выхода, генерация сигналов |
+| [src/backtest_engine.py](src/backtest_engine.py) | `BacktestEngine`: индикаторы, симуляция, метрики, графики |
+| [src/parser_okx.py](src/parser_okx.py) | скачивание свечей с OKX (`python src/parser_okx.py`, параметры в начале файла) |
+| [src/data_cleaner.py](src/data_cleaner.py) | очистка выбросов в ценовых рядах |
+| [scripts/quantstats_report.py](scripts/quantstats_report.py) | отчёт QuantStats → `backtest_results/quantstats_report.html` |
 
-# Бэктест
-INITIAL_CAPITAL = 10000      # Начальный капитал ($)
-COMMISSION_RATE = 0.0        # Комиссия (%)
-POSITION_SIZE_MULTIPLIER = 100
-```
+## Метрики в терминале
 
-## 📊 Стратегия
+`engine.print_statistics()` выводит блоками:
 
-**Вход:**
-- 15m: пересечение ±2σ (точка входа)
-- 1H: подтверждение выше/ниже ±2σ
+- **Финансовые**: капитал начало/конец, PnL, Total return, CAGR, макс. просадка (USD и %), кол-во сделок.
+- **По ногам**: средний вес, PnL (%, $) BTC и ETH.
+- **Сделки**: Win rate, Profit factor, Avg win / Avg loss, Expectancy, Gross profit/loss.
+- **Риск**: Sharpe, Sortino, Calmar, Recovery factor.
+- **Доходность по годам** и первые 5 сделок.
 
-**Выход:**
-- 1H: пересечение ±2σ (основной сигнал)
-- 15m: подтверждение выше/ниже ±2σ
+Пример результата с параметрами по умолчанию (BTC/ETH 1H, 2021-01 … 2025-12):
 
-**Защита:** ✅ Только одна позиция одновременно
+| Метрика | Значение |
+|---|---|
+| Капитал | 10 000 → 20 568 $ (+105.7%) |
+| CAGR | 15.85% |
+| Сделок / Win rate | 104 / 56.7% |
+| Profit factor | 1.28 |
+| Sharpe / Sortino / Calmar | 1.39 / 1.95 / 0.30 |
 
-## 🎯 Доработка
+## Результаты
 
-**Изменить параметры:**  
-→ Редактируй `src/config.py`
+- `trades_log.xlsx` — лог всех сделок
+- `backtest_results/equity_curve.png`, `backtest_results/dashboard.png` — графики
+- `backtest_results/quantstats_report.html` — отчёт QuantStats
 
-**Изменить логику стратегии:**  
-→ Редактируй `src/strategy.py`
-- `check_long_entry()` - вход в лонг
-- `check_short_entry()` - вход в шорт  
-- `check_long_exit()` - выход из лонга
-- `check_short_exit()` - выход из шорта
-
-**Движок остается без изменений:**  
-→ `src/backtest_engine.py` - универсальный
-
-## 📈 Результаты
-
-После запуска создаются:
-- **Консоль**: статистика (сделки, винрейт, P&L, просадка)
-- **trades_log.csv**: лог всех сделок
-- **backtest_results.png**: 4 графика
-
-## 📋 Зависимости
-
-```bash
-pip install pandas numpy matplotlib
-```
+Графики показываются интерактивно; отключить — `SHOW_CHART = False` в `src/config.py`.
